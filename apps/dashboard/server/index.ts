@@ -217,7 +217,7 @@ async function syncGit(): Promise<GitSyncResult> {
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
     const why = err.code === "ENOENT" || err.code === "ECONNREFUSED" ? "Docker isn't reachable" : err.message;
-    return { synced: 0, failed: [], error: `Saved, but environments weren't updated: ${why}. They'll be updated when the dashboard next starts with Docker available.` };
+    return { synced: 0, failed: [], checks: [], unchecked: [], error: `Saved, but environments weren't updated: ${why}. They'll be updated when the dashboard next starts with Docker available.` };
   }
 }
 const gitReply = async (c: Context) => c.json({ settings: settings.public(), sync: await syncGit() });
@@ -316,6 +316,7 @@ serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => 
     .syncGit()
     .then((r) => {
       if (r.failed.length) console.warn(`git settings not applied to: ${r.failed.map((f) => `${f.env} (${f.error})`).join(", ")}`);
+      for (const c of r.checks.filter((k) => !k.ok)) console.warn(`git in ${c.env} gets no token for ${c.protocol}://${c.host}: ${c.detail ?? ""}`);
     })
     .catch(() => undefined);
 });

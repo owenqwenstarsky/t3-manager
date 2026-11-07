@@ -152,16 +152,24 @@ while IFS= read -r line; do
   esac
 done
 case "$protocol" in https | http) ;; *) exit 0 ;; esac
-[ -r ${GIT_CREDENTIALS_FILE} ] || exit 0
+# Git shows a helper's stderr, so say why no token was given.
+if [ ! -r ${GIT_CREDENTIALS_FILE} ]; then
+  echo "t3-manager: git tokens can't be read as $(id -un) (${GIT_CREDENTIALS_FILE}). Open Settings > Git and use Apply and check." >&2
+  exit 0
+fi
 host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
 tab=$(printf '\\t')
 while IFS="$tab" read -r h u p mode; do
   if [ "$h" = "$host" ]; then
-    [ "$protocol" = https ] || [ "$mode" = any ] || exit 0
+    if [ "$protocol" = http ] && [ "$mode" != any ]; then
+      echo "t3-manager: the token for $host is only sent over HTTPS. Turn on Allow plain HTTP for it in Settings > Git." >&2
+      exit 0
+    fi
     printf 'username=%s\\npassword=%s\\n' "$u" "$p"
     exit 0
   fi
 done < ${GIT_CREDENTIALS_FILE}
+echo "t3-manager: no git token is saved for $host (Settings > Git)." >&2
 exit 0
 `;
 
@@ -187,4 +195,55 @@ export function gitTarFiles(
     // The token file: root and the dev group only.
     { name: `${dir}/credentials`, content: renderGitCredentials(s.gitCredentials), mode: 0o640, gid: DEV_GID },
   ];
+}
+
+/** Runs as root after the files are copied in: ownership by name, in case the archive's ids didn't stick. */
+export const GIT_FIX_PERMISSIONS = `set -e
+chown root:dev ${GIT_CREDENTIALS_FILE} 2>/dev/null || chown 0:1000 ${GIT_CREDENTIALS_FILE}
+chmod 0640 ${GIT_CREDENTIALS_FILE}
+chmod 0755 ${GIT_DIR} ${GIT_HELPER_FILE}
+chmod 0644 /etc/gitconfig`;
+
+/**
+ * Runs as dev: asks git for each server's credential exactly like a clone with
+ * prompts disabled does. $T3M_CHECKS holds "protocol host" lines. Prints one
+ * "ok|fail protocol host [detail]" line per server; passwords never leave the
+ * container (the password= line is only tested for, never printed).
+ */
+export const GIT_CHECK_SCRIPT = `printf '%s\\n' "$T3M_CHECKS" | while read -r proto host; do
+  [ -n "$host" ] || continue
+  out=$(printf 'protocol=%s\\nhost=%s\\n\\n' "$proto" "$host" | GIT_TERMINAL_PROMPT=0 GIT_ASKPASS='' SSH_ASKPASS='' git credential fill 2>&1)
+  if printf '%s\\n' "$out" | grep -q '^password=.'; then
+    echo "ok $proto $host"
+  else
+    why=$(printf '%s\\n' "$out" | grep -v '^password=' | tr '\\n' ' ')
+    # shellcheck disable=SC2012 # human-readable listing for the report
+    files=$(ls -ln /etc/gitconfig ${GIT_DIR}/ 2>&1 | tr '\\n' ' ')
+    helper=$(git config --show-origin --get-all credential.helper 2>&1 | tr '\\n' ' ')
+    echo "fail $proto $host git said: $why| user: $(id) | helpers: $helper| files: $files"
+  fi
+done`;
+
+export interface GitCheck {
+  host: string;
+  protocol: string;
+  ok: boolean;
+  detail?: string;
+}
+
+/** The "protocol host" lines checked for a set of credentials. */
+export function gitCheckInput(creds: Pick<GitCredential, "host" | "allowHttp">[]): string {
+  return creds.map((c) => `${c.allowHttp ? "http" : "https"} ${c.host}`).join("\n");
+}
+
+export function parseGitCheck(stdout: string): GitCheck[] {
+  const checks: GitCheck[] = [];
+  for (const line of stdout.split("\n")) {
+    const m = /^(ok|fail) (https?) (\S+)(?: (.*))?$/.exec(line.trim());
+    if (!m) continue;
+    // Belt and braces: nothing that looks like a password line is ever reported.
+    const detail = m[4]?.replace(/password=\S*/g, "password=…").trim().slice(0, 600);
+    checks.push({ ok: m[1] === "ok", protocol: m[2]!, host: m[3]!, ...(detail ? { detail } : {}) });
+  }
+  return checks;
 }

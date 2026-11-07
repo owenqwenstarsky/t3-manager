@@ -218,6 +218,10 @@ export interface Settings {
 export interface GitSyncResult {
   synced: number;
   failed: { env: string; error: string }[];
+  /** Per running environment and server: did git (as dev, prompts off) get a token? */
+  checks: { env: string; host: string; protocol: string; ok: boolean; detail?: string }[];
+  /** Stopped environments: files written, but git couldn't be checked. */
+  unchecked: string[];
   /** Docker itself was unreachable. */
   error?: string;
 }

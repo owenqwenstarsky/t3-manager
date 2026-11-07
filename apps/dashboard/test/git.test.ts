@@ -6,7 +6,10 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_GIT_AUTHOR,
   GIT_CREDENTIALS_FILE,
+  GIT_CHECK_SCRIPT,
   GIT_CREDENTIAL_HELPER,
+  gitCheckInput,
+  parseGitCheck,
   GIT_HELPER_FILE,
   defaultGitUsername,
   fillTemplate,
@@ -138,13 +141,56 @@ describe("generated files with real git", () => {
     expect(fill("https://10.77.0.11:3000/owner/bloxblast.git")).toContain("password=gitea_tok");
     expect(fill("http://10.77.0.11:3001/x.git")).not.toContain("password=");
   });
+  it("explains on stderr why it gave no token", () => {
+    expect(fill("http://github.com/x.git")).toContain("only sent over HTTPS. Turn on Allow plain HTTP");
+    expect(fill("https://gitlab.com/x.git")).toContain("no git token is saved for gitlab.com");
+  });
   it("ignores store and erase", () => {
     git(["credential", "reject"], "protocol=https\nhost=github.com\nusername=x-access-token\npassword=ghp_secret\n\n");
     expect(fill("https://github.com/x.git")).toContain("password=ghp_secret");
   });
+  it("checks every server the way a clone does, without printing tokens", () => {
+    const checks = gitCheckInput([
+      { host: "github.com" },
+      { host: "10.77.0.11:3000", allowHttp: true },
+      { host: "gitlab.com" },
+    ]);
+    const out = execFileSync("sh", ["-c", GIT_CHECK_SCRIPT], { env: { ...env, T3M_CHECKS: checks }, cwd: dir, encoding: "utf8" });
+    expect(out).not.toContain("ghp_secret");
+    expect(out).not.toContain("gitea_tok");
+    const parsed = parseGitCheck(out);
+    expect(parsed.map((c) => [c.protocol, c.host, c.ok])).toEqual([
+      ["https", "github.com", true],
+      ["http", "10.77.0.11:3000", true],
+      ["https", "gitlab.com", false],
+    ]);
+    expect(parsed[2]!.detail).toContain("terminal prompts disabled");
+    expect(parsed[2]!.detail).toContain("credential-helper");
+  });
+  it("reports an unreadable token file as a failure", () => {
+    const locked = path.join(dir, "locked-helper");
+    writeFileSync(locked, GIT_CREDENTIAL_HELPER.replaceAll(GIT_CREDENTIALS_FILE, path.join(dir, "missing")), { mode: 0o755 });
+    const lockedConfig = path.join(dir, "locked-gitconfig");
+    writeFileSync(lockedConfig, renderGitConfig(null).replace(GIT_HELPER_FILE, locked));
+    const out = execFileSync("sh", ["-c", GIT_CHECK_SCRIPT], {
+      env: { ...env, GIT_CONFIG_SYSTEM: lockedConfig, T3M_CHECKS: "https github.com" },
+      cwd: dir,
+      encoding: "utf8",
+    });
+    expect(parseGitCheck(out)).toMatchObject([{ host: "github.com", ok: false }]);
+  });
   it("sets the author", () => {
     expect(git(["config", "user.name"]).trim()).toBe("alice (T3)");
     expect(git(["config", "user.email"]).trim()).toBe("alice@t3.invalid");
+  });
+});
+
+describe("parseGitCheck", () => {
+  it("parses lines and scrubs anything password-like", () => {
+    expect(parseGitCheck("ok https github.com\nfail http git.lan:3000 git said: x password=abc |\njunk\n")).toEqual([
+      { ok: true, protocol: "https", host: "github.com" },
+      { ok: false, protocol: "http", host: "git.lan:3000", detail: "git said: x password=… |" },
+    ]);
   });
 });
 

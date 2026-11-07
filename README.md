@@ -171,6 +171,7 @@ doesn't invent one; add a rule to include them.
 | Card says **HTTPS not available** | Enable HTTPS Certificates for the tailnet (step 1), then **Restart** the environment |
 | Card says **Needs tailnet login** | Click **Log in to Tailscale**, or save an auth key in Settings for next time |
 | Claude Code / Codex say they can't reach the model | **Accounts** needs at least one active account for that provider. Check **Usage → Recent requests → Failed** |
+| Clone fails with `could not read Username … terminal prompts disabled` | Look for a `t3-manager:` line just above it in the error. It names the cause: no token saved for that server, token is HTTPS-only (turn on **Allow plain HTTP** for an `http://` server), or the token file isn't readable. **Settings → Git → Apply and check** rewrites the files in every environment and checks, as the `dev` user, that git gets each token. |
 | **Image t3-env:latest is not built** | `docker compose up -d --build` in `deploy/` |
 
 ## Repository layout

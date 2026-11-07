@@ -24,7 +24,15 @@ import {
   validateEnvName,
   type TailscaleInfo,
 } from "./logic.js";
-import { gitAuthorFor, gitTarFiles, type GitVars } from "./git.js";
+import {
+  GIT_CHECK_SCRIPT,
+  GIT_FIX_PERMISSIONS,
+  gitAuthorFor,
+  gitCheckInput,
+  gitTarFiles,
+  parseGitCheck,
+  type GitVars,
+} from "./git.js";
 import { proxy } from "./proxy.js";
 import { settings } from "./settings.js";
 import type { EnvSummary, GitSyncResult, PairLink, PairedSession } from "./shared/types.js";
@@ -35,6 +43,30 @@ import type { EnvSummary, GitSyncResult, PairLink, PairedSession } from "./share
  */
 async function writeGitFiles(containerId: string, vars: GitVars): Promise<void> {
   await putFiles(containerId, "/", gitTarFiles(settings.raw, vars));
+}
+
+/**
+ * In a running container: fixes ownership by name, then asks git (as dev,
+ * prompts disabled, like a clone) for every server's credential.
+ */
+async function checkGit(containerId: string): Promise<{ host: string; protocol: string; ok: boolean; detail?: string }[]> {
+  const fix = await exec(containerId, ["sh", "-c", GIT_FIX_PERMISSIONS], { user: "root", timeoutMs: 15_000 });
+  if (fix.exitCode !== 0) throw new Error(`could not set permissions: ${(fix.stderr || fix.stdout).trim().slice(0, 300)}`);
+  const creds = settings.raw.gitCredentials;
+  if (!creds.length) return [];
+  const res = await exec(containerId, ["sh", "-c", GIT_CHECK_SCRIPT], {
+    user: "dev",
+    env: ["HOME=/home/dev", `T3M_CHECKS=${gitCheckInput(creds)}`],
+    timeoutMs: 20_000,
+  });
+  const checks = parseGitCheck(res.stdout);
+  // A server missing from the output means the script itself broke.
+  for (const c of creds) {
+    if (!checks.some((k) => k.host === c.host)) {
+      checks.push({ host: c.host, protocol: c.allowHttp ? "http" : "https", ok: false, detail: (res.stderr || res.stdout).trim().slice(0, 300) || "no result" });
+    }
+  }
+  return checks;
 }
 
 const TS = ["tailscale", "--socket=/var/run/tailscale/tailscaled.sock"];
@@ -183,7 +215,7 @@ export const envs = {
 
   /** Pushes the current git credentials and author into every environment. */
   async syncGit(): Promise<GitSyncResult> {
-    const result: GitSyncResult = { synced: 0, failed: [] };
+    const result: GitSyncResult = { synced: 0, failed: [], checks: [], unchecked: [] };
     const list = await listEnvContainers();
     await Promise.all(
       list.map(async (c) => {
@@ -196,12 +228,19 @@ export const envs = {
             hostname: inspect.Config.Hostname,
           });
           result.synced++;
+          if (inspect.State.Running) {
+            for (const check of await checkGit(c.Id)) result.checks.push({ env, ...check });
+          } else {
+            result.unchecked.push(env);
+          }
         } catch (e) {
           result.failed.push({ env, error: (e as Error).message });
         }
       }),
     );
     result.failed.sort((a, b) => a.env.localeCompare(b.env));
+    result.checks.sort((a, b) => a.env.localeCompare(b.env) || a.host.localeCompare(b.host));
+    result.unchecked.sort();
     return result;
   },
 

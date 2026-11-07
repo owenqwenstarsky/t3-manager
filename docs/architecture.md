@@ -95,6 +95,13 @@ container is running or stopped:
 | `/etc/t3m-git/credential-helper` | root, 0755 | Answers git's `get` with the token for an exact host, over HTTPS (also HTTP when that server allows it). Ignores `store`/`erase`, so a failed push can't delete it |
 | `/etc/t3m-git/credentials` | root:dev, 0640 | `host<TAB>username<TAB>token<TAB>https\|any` |
 
+After writing them, the dashboard sets the token file's owner by name
+(`root:dev`) inside each running container. It then runs
+`git credential fill` as `dev` with prompts disabled, which is what a clone
+does, and reports per environment and server whether git got a token (the
+token itself never leaves the container). When the helper declines, it says
+why on stderr, and git shows that in the clone error.
+
 Using system scope leaves `~/.gitconfig` to the person. The author shows on
 each environment card ("commits as …").
 

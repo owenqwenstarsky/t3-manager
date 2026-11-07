@@ -153,26 +153,52 @@ function PricingCard({ s, onSave, saving }: { s: SettingsResponse; onSave: (p: P
 
 type GitReply = { settings: Settings; sync: GitSyncResult };
 
-/** Shows where a git change was applied: every environment, or which ones failed. */
+/** Shows where a git change was applied and whether git in each environment gets its tokens. */
 function SyncNotice({ sync }: { sync: GitSyncResult }) {
   if (sync.error) return <Notice tone="warning">{sync.error}</Notice>;
-  if (sync.failed.length)
-    return (
-      <Notice tone="warning" title={`Saved, but ${sync.failed.length} environment${sync.failed.length === 1 ? "" : "s"} weren't updated`}>
-        <ul className="mt-1 space-y-0.5 text-xs">
-          {sync.failed.map((f) => (
-            <li key={f.env}>
-              <span className="font-medium">{f.env}</span>: {f.error}
-            </li>
-          ))}
-        </ul>
-        <p className="mt-1 text-xs">They'll be updated the next time the dashboard starts, or use Apply again.</p>
-      </Notice>
-    );
+  const bad = sync.checks.filter((c) => !c.ok);
+  const okEnvs = new Set(sync.checks.filter((c) => c.ok).map((c) => c.env));
+  for (const c of bad) okEnvs.delete(c.env);
+  const hosts = [...new Set(sync.checks.map((c) => c.host))];
   return (
-    <p className="text-xs text-ink-3">
-      Applied to {sync.synced === 0 ? "no environments yet" : `${sync.synced} environment${sync.synced === 1 ? "" : "s"}`}. New environments get it when they're created.
-    </p>
+    <div className="space-y-2">
+      {sync.failed.length > 0 && (
+        <Notice tone="warning" title={`${sync.failed.length} environment${sync.failed.length === 1 ? "" : "s"} weren't updated`}>
+          <ul className="mt-1 space-y-0.5 text-xs">
+            {sync.failed.map((f) => (
+              <li key={f.env}>
+                <span className="font-medium">{f.env}</span>: {f.error}
+              </li>
+            ))}
+          </ul>
+        </Notice>
+      )}
+      {bad.length > 0 && (
+        <Notice tone="critical" title="git couldn't get a token in some environments">
+          <ul className="mt-1 space-y-2 text-xs">
+            {bad.map((c) => (
+              <li key={`${c.env}/${c.host}`}>
+                <div>
+                  <span className="font-medium">{c.env}</span> → <span className="font-mono">{c.protocol}://{c.host}</span>
+                </div>
+                {c.detail && <div className="mt-0.5 font-mono text-[11px] text-ink-3 break-all">{c.detail}</div>}
+              </li>
+            ))}
+          </ul>
+        </Notice>
+      )}
+      <p className="text-xs text-ink-3">
+        Written to {sync.synced} environment{sync.synced === 1 ? "" : "s"}.
+        {hosts.length > 0 && okEnvs.size > 0 && (
+          <>
+            {" "}
+            Checked inside {okEnvs.size}: git gets the token for {hosts.join(", ")}.
+          </>
+        )}
+        {sync.unchecked.length > 0 && <> Not checked because they're stopped: {sync.unchecked.join(", ")}.</>}
+        {sync.synced === 0 && " New environments get it when they're created."}
+      </p>
+    </div>
   );
 }
 
@@ -203,7 +229,7 @@ function GitCard({ s }: { s: SettingsResponse }) {
         subtitle="Pushed into every environment, existing and new: HTTPS tokens for your git servers, and a commit author that names the environment, so every commit can be traced back to where it was made."
         action={
           <Button size="sm" variant="ghost" loading={sync.isPending} onClick={() => sync.mutate()}>
-            Apply to all environments again
+            Apply and check
           </Button>
         }
       />
