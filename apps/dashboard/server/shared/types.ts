@@ -233,6 +233,8 @@ export interface Settings {
   /** Configured git servers. Tokens and usernames are never sent to the browser. */
   gitCredentials: { host: string; customUsername: boolean; allowHttp: boolean; updatedAt: number }[];
   gitAuthor: { enabled: boolean; name: string; email: string };
+  /** Gitea servers gt (the Gitea CLI) is logged in to. Tokens are never sent to the browser. */
+  giteaServers: { url: string; isDefault: boolean; updatedAt: number }[];
 }
 
 /** Result of pushing git settings into environment containers. */
@@ -242,6 +244,22 @@ export interface GitSyncResult {
   /** Per running environment and server: did git (as dev, prompts off) get a token? */
   checks: { env: string; host: string; protocol: string; ok: boolean; detail?: string }[];
   /** Stopped environments: files written, but git couldn't be checked. */
+  unchecked: string[];
+  /** Docker itself was unreachable. */
+  error?: string;
+}
+
+/** Result of pushing the Gitea CLI servers into environment containers. */
+export interface GiteaSyncResult {
+  synced: number;
+  failed: { env: string; error: string }[];
+  /** Per running environment and server: did `gt auth login` (as dev) succeed? */
+  checks: { env: string; url: string; ok: boolean; detail?: string }[];
+  /** Running environments where gt did nothing, and why (e.g. gt isn't installed on an old image). */
+  skipped: { env: string; reason: string }[];
+  /** Messages that don't stop gt from working, such as the default server not being set. */
+  warnings: { env: string; message: string }[];
+  /** Stopped environments: files written; gt logs in when they next start. */
   unchecked: string[];
   /** Docker itself was unreachable. */
   error?: string;

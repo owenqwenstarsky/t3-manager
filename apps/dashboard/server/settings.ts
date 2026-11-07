@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
 import { DEFAULT_GIT_AUTHOR, type GitAuthorSettings, type GitCredential } from "./git.js";
+import type { GiteaServer } from "./gitea.js";
 import { DEFAULT_PRICING } from "./pricing.js";
 import type { PriceRule, Settings } from "./shared/types.js";
 
@@ -23,6 +24,8 @@ interface StoredSettings {
   /** Tokens never leave the server: public() only exposes hosts. */
   gitCredentials: GitCredential[];
   gitAuthor: GitAuthorSettings;
+  /** Gitea servers gt is logged in to. Tokens never leave the server either. */
+  giteaServers: GiteaServer[];
 }
 
 const file = () => path.join(config.dataDir, "settings.json");
@@ -44,6 +47,7 @@ function load(): StoredSettings {
     envs: stored.envs ?? {},
     gitCredentials: stored.gitCredentials ?? [],
     gitAuthor: { ...DEFAULT_GIT_AUTHOR, ...stored.gitAuthor },
+    giteaServers: stored.giteaServers ?? [],
   };
 }
 
@@ -91,6 +95,9 @@ export const settings = {
         .map((g) => ({ host: g.host, customUsername: !!g.username, allowHttp: !!g.allowHttp, updatedAt: g.updatedAt }))
         .sort((a, b) => a.host.localeCompare(b.host)),
       gitAuthor: current.gitAuthor,
+      giteaServers: current.giteaServers
+        .map((g) => ({ url: g.url, isDefault: !!g.isDefault, updatedAt: g.updatedAt }))
+        .sort((a, b) => a.url.localeCompare(b.url)),
     };
   },
 };

@@ -10,11 +10,12 @@ import { config } from "./config.js";
 import { docker, imageExists, imageInfo } from "./docker.js";
 import { envs, HttpError } from "./envs.js";
 import { normalizeGitHost, validateGitToken, validateGitUsername } from "./git.js";
+import { normalizeGiteaUrl, validateGiteaToken, type GiteaServer } from "./gitea.js";
 import { DEFAULT_PRICING } from "./pricing.js";
 import { proxy, ProxyError } from "./proxy.js";
 import { settings } from "./settings.js";
 import { DIMS, events, summary, timeseries, windows, type UsageQuery } from "./usage.js";
-import type { GitSyncResult, UsageDim } from "./shared/types.js";
+import type { GiteaSyncResult, GitSyncResult, UsageDim } from "./shared/types.js";
 
 const app = new Hono();
 
@@ -300,6 +301,64 @@ api.put("/git/author", async (c) => {
 });
 api.post("/git/sync", gitReply);
 
+// --- Gitea CLI (gt logged in to these servers in every environment) ---------
+async function syncGitea(): Promise<GiteaSyncResult> {
+  try {
+    return await envs.syncGitea();
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    const why = err.code === "ENOENT" || err.code === "ECONNREFUSED" ? "Docker isn't reachable" : err.message;
+    return { synced: 0, failed: [], checks: [], skipped: [], warnings: [], unchecked: [], error: `Saved, but environments weren't updated: ${why}. They'll be updated when the dashboard next starts with Docker available.` };
+  }
+}
+const giteaReply = async (c: Context) => c.json({ settings: settings.public(), sync: await syncGitea() });
+/** At most one default; with servers saved, there is always one. */
+function withOneDefault(servers: GiteaServer[], preferred?: string): GiteaServer[] {
+  const def = preferred ?? servers.find((s) => s.isDefault)?.url ?? servers[0]?.url;
+  return servers.map((s) => ({ ...s, isDefault: s.url === def }));
+}
+function findGitea(url: string): GiteaServer {
+  const parsed = normalizeGiteaUrl(url);
+  const key = "url" in parsed ? parsed.url : url;
+  const existing = settings.raw.giteaServers.find((g) => g.url === key);
+  if (!existing) throw new HttpError(404, `No Gitea server ${url} is set up`);
+  return existing;
+}
+
+api.post("/gitea/servers", async (c) => {
+  const input = await body(c, z.object({ url: z.string(), token: z.string(), isDefault: z.boolean().optional() }));
+  const parsed = normalizeGiteaUrl(input.url);
+  if ("error" in parsed) throw new HttpError(400, parsed.error);
+  const token = input.token.trim();
+  checkOrThrow(validateGiteaToken(token));
+  if (settings.raw.giteaServers.some((g) => g.url === parsed.url)) {
+    throw new HttpError(409, `${parsed.url} is already set up. Change its token instead.`);
+  }
+  const servers = [...settings.raw.giteaServers, { url: parsed.url, token, updatedAt: Date.now() }];
+  settings.update({ giteaServers: withOneDefault(servers, input.isDefault ? parsed.url : undefined) });
+  return giteaReply(c);
+});
+// The URL travels in the body: it contains slashes.
+api.put("/gitea/servers", async (c) => {
+  // token: omitted keeps the current one (to only change the default).
+  const input = await body(c, z.object({ url: z.string(), token: z.string().optional(), isDefault: z.boolean().optional() }));
+  const existing = findGitea(input.url);
+  const token = input.token?.trim() || existing.token;
+  checkOrThrow(validateGiteaToken(token));
+  const servers = settings.raw.giteaServers.map((g) => (g.url === existing.url ? { ...g, token, updatedAt: Date.now() } : g));
+  const others = servers.filter((g) => g.url !== existing.url);
+  // Turning the default off hands it to another server, if there is one.
+  const preferred = input.isDefault === true ? existing.url : input.isDefault === false && existing.isDefault ? others[0]?.url : undefined;
+  settings.update({ giteaServers: withOneDefault(servers, preferred) });
+  return giteaReply(c);
+});
+api.delete("/gitea/servers", async (c) => {
+  const existing = findGitea(c.req.query("url") ?? "");
+  settings.update({ giteaServers: withOneDefault(settings.raw.giteaServers.filter((g) => g.url !== existing.url)) });
+  return giteaReply(c);
+});
+api.post("/gitea/sync", giteaReply);
+
 app.route("/api", api);
 
 // --- web UI ----------------------------------------------------------------
@@ -320,6 +379,13 @@ serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => 
     .then((r) => {
       if (r.failed.length) console.warn(`git settings not applied to: ${r.failed.map((f) => `${f.env} (${f.error})`).join(", ")}`);
       for (const c of r.checks.filter((k) => !k.ok)) console.warn(`git in ${c.env} gets no token for ${c.protocol}://${c.host}: ${c.detail ?? ""}`);
+    })
+    .catch(() => undefined);
+  envs
+    .syncGitea()
+    .then((r) => {
+      if (r.failed.length) console.warn(`Gitea CLI settings not applied to: ${r.failed.map((f) => `${f.env} (${f.error})`).join(", ")}`);
+      for (const c of r.checks.filter((k) => !k.ok)) console.warn(`gt in ${c.env} couldn't log in to ${c.url}: ${c.detail ?? ""}`);
     })
     .catch(() => undefined);
 });

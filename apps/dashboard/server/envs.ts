@@ -35,9 +35,10 @@ import {
   parseGitCheck,
   type GitVars,
 } from "./git.js";
+import { GITEA_FIX_PERMISSIONS, GITEA_SYNC_FILE, giteaTarFiles, parseGiteaSync, type GiteaSyncOutput } from "./gitea.js";
 import { proxy } from "./proxy.js";
 import { settings } from "./settings.js";
-import type { EnvSummary, GitSyncResult, PairLink, PairedSession } from "./shared/types.js";
+import type { EnvSummary, GiteaSyncResult, GitSyncResult, PairLink, PairedSession } from "./shared/types.js";
 
 /**
  * Writes the managed git files into a container (running or stopped). The
@@ -69,6 +70,58 @@ async function checkGit(containerId: string): Promise<{ host: string; protocol: 
     }
   }
   return checks;
+}
+
+/** Writes the Gitea CLI server list and login script into a container (running or stopped). */
+async function writeGiteaFiles(containerId: string): Promise<void> {
+  await putFiles(containerId, "/", giteaTarFiles(settings.raw));
+}
+
+/**
+ * In a running container: fixes ownership by name, then has gt (as dev) log
+ * in to every server and log out of the ones that were removed.
+ */
+async function loginGitea(containerId: string): Promise<GiteaSyncOutput> {
+  const fix = await exec(containerId, ["sh", "-c", GITEA_FIX_PERMISSIONS], { user: "root", timeoutMs: 15_000 });
+  if (fix.exitCode !== 0) throw new Error(`could not set permissions: ${(fix.stderr || fix.stdout).trim().slice(0, 300)}`);
+  const servers = settings.raw.giteaServers;
+  const res = await exec(containerId, ["sh", GITEA_SYNC_FILE], {
+    user: "dev",
+    env: ["HOME=/home/dev"],
+    timeoutMs: 30_000 + servers.length * 20_000,
+  });
+  const out = parseGiteaSync(res.stdout, servers.map((s) => s.token));
+  if (!out.skipped) {
+    // A server missing from the output means the script itself broke.
+    for (const s of servers) {
+      if (!out.checks.some((k) => k.url === s.url)) {
+        out.checks.push({ url: s.url, ok: false, detail: (res.stderr || res.stdout).trim().slice(0, 300) || "no result" });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Runs `fn` for every environment container. Errors are collected per
+ * environment instead of stopping the others.
+ */
+async function forEachEnvContainer(
+  fn: (c: Awaited<ReturnType<typeof listEnvContainers>>[number], env: string, inspect: Awaited<ReturnType<ReturnType<typeof docker.getContainer>["inspect"]>>) => Promise<void>,
+): Promise<{ env: string; error: string }[]> {
+  const failed: { env: string; error: string }[] = [];
+  const list = await listEnvContainers();
+  await Promise.all(
+    list.map(async (c) => {
+      const env = c.Labels[LABEL_NAME] ?? c.Names[0]?.replace(/^\//, "") ?? c.Id;
+      try {
+        await fn(c, env, await docker.getContainer(c.Id).inspect());
+      } catch (e) {
+        failed.push({ env, error: (e as Error).message });
+      }
+    }),
+  );
+  return failed.sort((a, b) => a.env.localeCompare(b.env));
 }
 
 const TS = ["tailscale", "--socket=/var/run/tailscale/tailscaled.sock"];
@@ -183,6 +236,8 @@ async function startEnvContainer(input: {
   if (input.proxyKey) files.push({ name: "proxy_key", content: input.proxyKey });
   if (files.length) await putFiles(container.id, "/etc/t3m", files);
   await writeGitFiles(container.id, { env: input.name, owner: input.owner, hostname: input.hostname });
+  // gt logs in at start (see the image's entrypoint).
+  await writeGiteaFiles(container.id);
   if (input.start !== false) await container.start();
   return container;
 }
@@ -273,30 +328,44 @@ export const envs = {
   /** Pushes the current git credentials and author into every environment. */
   async syncGit(): Promise<GitSyncResult> {
     const result: GitSyncResult = { synced: 0, failed: [], checks: [], unchecked: [] };
-    const list = await listEnvContainers();
-    await Promise.all(
-      list.map(async (c) => {
-        const env = c.Labels[LABEL_NAME] ?? c.Names[0]?.replace(/^\//, "") ?? c.Id;
-        try {
-          const inspect = await docker.getContainer(c.Id).inspect();
-          await writeGitFiles(c.Id, {
-            env,
-            owner: c.Labels[LABEL_OWNER] || settings.env(env)?.owner,
-            hostname: inspect.Config.Hostname,
-          });
-          result.synced++;
-          if (inspect.State.Running) {
-            for (const check of await checkGit(c.Id)) result.checks.push({ env, ...check });
-          } else {
-            result.unchecked.push(env);
-          }
-        } catch (e) {
-          result.failed.push({ env, error: (e as Error).message });
-        }
-      }),
-    );
-    result.failed.sort((a, b) => a.env.localeCompare(b.env));
+    result.failed = await forEachEnvContainer(async (c, env, inspect) => {
+      await writeGitFiles(c.Id, {
+        env,
+        owner: c.Labels[LABEL_OWNER] || settings.env(env)?.owner,
+        hostname: inspect.Config.Hostname,
+      });
+      result.synced++;
+      if (inspect.State.Running) {
+        for (const check of await checkGit(c.Id)) result.checks.push({ env, ...check });
+      } else {
+        result.unchecked.push(env);
+      }
+    });
     result.checks.sort((a, b) => a.env.localeCompare(b.env) || a.host.localeCompare(b.host));
+    result.unchecked.sort();
+    return result;
+  },
+
+  /**
+   * Pushes the Gitea CLI servers into every environment and, in running ones,
+   * has gt log in to them. Stopped ones log in when they next start.
+   */
+  async syncGitea(): Promise<GiteaSyncResult> {
+    const result: GiteaSyncResult = { synced: 0, failed: [], checks: [], skipped: [], warnings: [], unchecked: [] };
+    result.failed = await forEachEnvContainer(async (c, env, inspect) => {
+      await writeGiteaFiles(c.Id);
+      result.synced++;
+      if (!inspect.State.Running) {
+        result.unchecked.push(env);
+        return;
+      }
+      const out = await loginGitea(c.Id);
+      if (out.skipped) result.skipped.push({ env, reason: out.skipped });
+      for (const check of out.checks) result.checks.push({ env, ...check });
+      for (const message of out.warnings) result.warnings.push({ env, message });
+    });
+    result.checks.sort((a, b) => a.env.localeCompare(b.env) || a.url.localeCompare(b.url));
+    result.skipped.sort((a, b) => a.env.localeCompare(b.env));
     result.unchecked.sort();
     return result;
   },
