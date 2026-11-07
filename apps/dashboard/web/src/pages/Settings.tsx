@@ -215,7 +215,7 @@ function GitCard({ s }: { s: SettingsResponse }) {
           <div>
             <h3 className="text-sm font-semibold">Credentials</h3>
             <p className="text-xs text-ink-3 mt-0.5">
-              One token per server. Tokens can't be viewed again after saving, only replaced. Git uses them only over HTTPS.
+              One token per server. Tokens can't be viewed again after saving, only replaced. Git sends them only over HTTPS unless you allow plain HTTP for a server.
             </p>
           </div>
           <Button size="sm" variant={s.gitCredentials.length ? "secondary" : "primary"} icon={<Plus className="size-4" />} onClick={() => setAdding(true)}>
@@ -232,10 +232,11 @@ function GitCard({ s }: { s: SettingsResponse }) {
               <div key={g.host} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-3.5 py-2.5">
                 <KeyRound className="size-4 text-ink-3 shrink-0" />
                 <div className="min-w-0 flex-1">
-                  <div className="font-mono text-[13px] truncate">{g.host}</div>
+                  <div className="font-mono text-[13px] truncate">{g.allowHttp ? `http://${g.host}` : g.host}</div>
                   <div className="text-xs text-ink-3">
                     Token set · updated {ago(g.updatedAt)}
                     {g.customUsername && " · custom username"}
+                    {g.allowHttp && <span className="text-ink-2"> · plain HTTP allowed (token sent unencrypted)</span>}
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
@@ -256,7 +257,15 @@ function GitCard({ s }: { s: SettingsResponse }) {
       <AuthorSection s={s} onDone={done} />
 
       {adding && <CredentialModal mode="add" existing={s.gitCredentials.map((g) => g.host)} onClose={() => setAdding(false)} onDone={done} />}
-      {changing && <CredentialModal mode="change" host={changing} onClose={() => setChanging(null)} onDone={done} />}
+      {changing && (
+        <CredentialModal
+          mode="change"
+          host={changing}
+          allowHttp={!!s.gitCredentials.find((g) => g.host === changing)?.allowHttp}
+          onClose={() => setChanging(null)}
+          onDone={done}
+        />
+      )}
       {removing && (
         <Modal
           open
@@ -279,29 +288,37 @@ function GitCard({ s }: { s: SettingsResponse }) {
 }
 
 function CredentialModal(
-  props: { onClose: () => void; onDone: (r: GitReply) => void } & ({ mode: "add"; existing: string[] } | { mode: "change"; host: string }),
+  props: { onClose: () => void; onDone: (r: GitReply) => void } & (
+    | { mode: "add"; existing: string[] }
+    | { mode: "change"; host: string; allowHttp: boolean }
+  ),
 ) {
   const [hostInput, setHostInput] = useState("");
   const [token, setToken] = useState("");
   const [username, setUsername] = useState("");
   const [showUser, setShowUser] = useState(false);
+  // null: follow the scheme typed in the address (http:// turns it on).
+  const [httpChoice, setHttpChoice] = useState<boolean | null>(props.mode === "change" ? props.allowHttp : null);
   const parsed = props.mode === "add" && hostInput.trim() ? normalizeGitHost(hostInput) : null;
+  const allowHttp = httpChoice ?? (!!parsed && "scheme" in parsed && parsed.scheme === "http");
+  const httpChanged = props.mode === "change" && allowHttp !== props.allowHttp;
   const host = props.mode === "change" ? props.host : parsed && "host" in parsed ? parsed.host : "";
   const duplicate = props.mode === "add" && !!host && props.existing.includes(host);
   const save = useMutation({
     mutationFn: () =>
       props.mode === "add"
-        ? api<GitReply>("/git/credentials", { body: { host: hostInput, token, username: username.trim() || undefined } })
+        ? api<GitReply>("/git/credentials", { body: { host: hostInput, token, username: username.trim() || undefined, allowHttp } })
         : api<GitReply>(`/git/credentials/${encodeURIComponent(props.host)}`, {
             method: "PUT",
-            body: { token, ...(showUser ? { username: username.trim() } : {}) },
+            body: { token: token.trim() || undefined, allowHttp, ...(showUser ? { username: username.trim() } : {}) },
           }),
     onSuccess: (r) => {
       props.onDone(r);
       props.onClose();
     },
   });
-  const canSave = !!token.trim() && !!host && !duplicate && !save.isPending;
+  const canSave =
+    (props.mode === "add" ? !!token.trim() : !!token.trim() || httpChanged || showUser) && !!host && !duplicate && !save.isPending;
   return (
     <Modal
       open
@@ -312,7 +329,7 @@ function CredentialModal(
         <>
           <Button variant="ghost" onClick={props.onClose}>Cancel</Button>
           <Button variant="primary" disabled={!canSave} loading={save.isPending} onClick={() => save.mutate()}>
-            {props.mode === "add" ? "Save" : "Replace token"}
+            {props.mode === "add" ? "Save" : token.trim() ? "Replace token" : "Save"}
           </Button>
         </>
       }
@@ -342,7 +359,10 @@ function CredentialModal(
             <input className={cx(inputClass, "font-mono text-xs")} autoFocus value={hostInput} onChange={(e) => setHostInput(e.target.value)} placeholder="github.com" />
           </Field>
         )}
-        <Field label={props.mode === "add" ? "Token" : "New token"} hint={host ? tokenHint(host) : undefined}>
+        <Field
+          label={props.mode === "add" ? "Token" : "New token"}
+          hint={props.mode === "change" ? "Leave empty to keep the current token." : host ? tokenHint(host) : undefined}
+        >
           <input
             className={cx(inputClass, "font-mono text-xs")}
             type="password"
@@ -369,6 +389,20 @@ function CredentialModal(
             {props.mode === "change" ? "Change the username too" : "Set a username (only some servers need one)"}
           </button>
         )}
+        <div className="rounded-lg border border-line px-3 py-2.5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[13px] font-medium">Allow plain HTTP</div>
+              <div className="text-xs text-ink-3 mt-0.5">For servers without HTTPS, like a LAN Gitea at http://10.0.0.5:3000.</div>
+            </div>
+            <Toggle checked={allowHttp} onChange={setHttpChoice} label="Allow plain HTTP" />
+          </div>
+          {allowHttp && (
+            <p className="mt-2 text-xs text-ink-2">
+              The token is sent unencrypted to <span className="font-mono">http://{host || "…"}</span>. Only use this on a network you trust.
+            </p>
+          )}
+        </div>
         {save.error && <Notice tone="critical">{(save.error as Error).message}</Notice>}
         <button type="submit" className="hidden" />
       </form>

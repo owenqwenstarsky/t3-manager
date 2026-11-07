@@ -106,7 +106,10 @@ image, so it exits right away. Once the stack is up, the dashboard is at
 4. **Settings → Git** (optional).
    - **Credentials:** add an HTTPS token for each git server (github.com,
      gitlab.com, your own host). There's one token per server. After saving
-     you can only replace or remove it, not view it.
+     you can only replace or remove it, not view it. For a server without
+     HTTPS (say a LAN Gitea at `http://10.0.0.5:3000`), enter its `http://`
+     address or turn on **Allow plain HTTP**. The token is then sent
+     unencrypted to that server only.
    - **Commit author:** set an author template (default `{env} (T3) <{env}@t3.invalid>`)
      so every commit shows which environment made it.
    - **Delivery:** both are pushed into every environment, existing and new,
@@ -138,8 +141,8 @@ doesn't invent one; add a rule to include them.
 - T3's in-app browser needs `sudo t3 browser setup` once in the T3 terminal.
 - Git uses the dashboard's settings through `/etc/gitconfig` (system scope).
   People can still override them in `~/.gitconfig` or per repository. Tokens
-  are answered only over HTTPS, and only for the exact server they were saved
-  for.
+  are only given out for the exact server they were saved for, and only over
+  HTTPS unless plain HTTP is allowed for that server.
 - Claude Code reads `~/.claude/settings.json` and Codex reads `~/.codex/config.toml`.
   The entrypoint rewrites only the proxy keys in those files at each start.
 

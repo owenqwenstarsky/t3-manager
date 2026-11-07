@@ -88,7 +88,7 @@ export const settings = {
       proxyUrl: config.proxyUrl,
       authRequired: config.adminPassword !== "",
       gitCredentials: current.gitCredentials
-        .map((g) => ({ host: g.host, customUsername: !!g.username, updatedAt: g.updatedAt }))
+        .map((g) => ({ host: g.host, customUsername: !!g.username, allowHttp: !!g.allowHttp, updatedAt: g.updatedAt }))
         .sort((a, b) => a.host.localeCompare(b.host)),
       gitAuthor: current.gitAuthor,
     };

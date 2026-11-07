@@ -4,8 +4,8 @@
  *
  * Files written into each container (see envs.syncGit):
  *   /etc/gitconfig                      system git config: author + credential helper
- *   /etc/t3m-git/credential-helper      read-only helper, answers `get` for known hosts over HTTPS
- *   /etc/t3m-git/credentials            host<TAB>username<TAB>token, root:dev 0640
+ *   /etc/t3m-git/credential-helper      read-only helper, answers `get` for known hosts
+ *   /etc/t3m-git/credentials            host<TAB>username<TAB>token<TAB>https|any, root:dev 0640
  */
 
 export interface GitCredential {
@@ -13,6 +13,8 @@ export interface GitCredential {
   /** Empty means the default for the host (see defaultGitUsername). */
   username?: string;
   token: string;
+  /** Also send the token to http:// remotes on this server (unencrypted). */
+  allowHttp?: boolean;
   updatedAt: number;
 }
 
@@ -38,8 +40,9 @@ export const GIT_HELPER_FILE = `${GIT_DIR}/credential-helper`;
  * lowercase. Accepts bare hosts and http(s) URLs (path and user are dropped).
  * Returns an error message for anything else.
  */
-export function normalizeGitHost(input: string): { host: string } | { error: string } {
+export function normalizeGitHost(input: string): { host: string; scheme?: "http" | "https" } | { error: string } {
   let s = input.trim();
+  const scheme = /^http:\/\//i.test(s) ? "http" : /^https:\/\//i.test(s) ? "https" : undefined;
   if (!s) return { error: "Enter a server address, like github.com" };
   if (/^(ssh|git):\/\//i.test(s) || /^[^/\s]+@[^/\s]+:/.test(s)) {
     return { error: "Tokens are used over HTTPS. Enter the server's https address, like github.com" };
@@ -59,8 +62,9 @@ export function normalizeGitHost(input: string): { host: string } | { error: str
   if (!m || s.length > 253) return { error: "That isn't a valid server address" };
   const port = m[2] ? Number(m[2]) : undefined;
   if (port !== undefined && (port < 1 || port > 65535)) return { error: "That port isn't valid" };
-  // git sends the host without a port for the default HTTPS port.
-  return { host: port === 443 ? m[1]! : s };
+  // git sends the host without a port when it is the default for the scheme.
+  const defaultPort = scheme === "http" ? 80 : 443;
+  return { host: port === defaultPort ? m[1]! : s, ...(scheme ? { scheme } : {}) };
 }
 
 /** Username sent with the token when none is set. Hosts that check it get the value they document. */
@@ -90,7 +94,7 @@ export function renderGitCredentials(creds: GitCredential[]): string {
   return creds
     .slice()
     .sort((a, b) => a.host.localeCompare(b.host))
-    .map((c) => `${c.host}\t${c.username || defaultGitUsername(c.host)}\t${c.token}\n`)
+    .map((c) => `${c.host}\t${c.username || defaultGitUsername(c.host)}\t${c.token}\t${c.allowHttp ? "any" : "https"}\n`)
     .join("");
 }
 
@@ -131,9 +135,9 @@ export function renderGitConfig(author: { name: string; email: string } | null):
 
 /**
  * git credential helper protocol: git writes key=value lines on stdin and reads
- * username/password back. Only `get` is answered and only over HTTPS, so a token
- * never goes to a plain-HTTP remote; `store`/`erase` are ignored so a failed push
- * can't remove the managed credential.
+ * username/password back. Only `get` is answered, and only over HTTPS unless the
+ * server was saved with plain HTTP allowed; `store`/`erase` are ignored so a
+ * failed push can't remove the managed credential.
  */
 export const GIT_CREDENTIAL_HELPER = `#!/bin/sh
 # Managed by T3 Manager: serves the git tokens set in the dashboard (read-only).
@@ -147,12 +151,13 @@ while IFS= read -r line; do
     host=*) host=\${line#host=} ;;
   esac
 done
-[ "$protocol" = https ] || exit 0
+case "$protocol" in https | http) ;; *) exit 0 ;; esac
 [ -r ${GIT_CREDENTIALS_FILE} ] || exit 0
 host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
 tab=$(printf '\\t')
-while IFS="$tab" read -r h u p; do
+while IFS="$tab" read -r h u p mode; do
   if [ "$h" = "$host" ]; then
+    [ "$protocol" = https ] || [ "$mode" = any ] || exit 0
     printf 'username=%s\\npassword=%s\\n' "$u" "$p"
     exit 0
   fi

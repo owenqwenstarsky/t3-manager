@@ -210,7 +210,7 @@ export interface Settings {
   proxyUrl: string;
   authRequired: boolean;
   /** Configured git servers. Tokens and usernames are never sent to the browser. */
-  gitCredentials: { host: string; customUsername: boolean; updatedAt: number }[];
+  gitCredentials: { host: string; customUsername: boolean; allowHttp: boolean; updatedAt: number }[];
   gitAuthor: { enabled: boolean; name: string; email: string };
 }
 

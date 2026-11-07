@@ -92,8 +92,8 @@ container is running or stopped:
 | File | Owner, mode | Purpose |
 | --- | --- | --- |
 | `/etc/gitconfig` | root, 0644 | System-scope `user.name`/`user.email` from the template, and `credential.helper` |
-| `/etc/t3m-git/credential-helper` | root, 0755 | Answers git's `get` with the token for an exact host over HTTPS. Ignores `store`/`erase`, so a failed push can't delete it |
-| `/etc/t3m-git/credentials` | root:dev, 0640 | `host<TAB>username<TAB>token` |
+| `/etc/t3m-git/credential-helper` | root, 0755 | Answers git's `get` with the token for an exact host, over HTTPS (also HTTP when that server allows it). Ignores `store`/`erase`, so a failed push can't delete it |
+| `/etc/t3m-git/credentials` | root:dev, 0640 | `host<TAB>username<TAB>token<TAB>https\|any` |
 
 Using system scope leaves `~/.gitconfig` to the person. The author shows on
 each environment card ("commits as …").

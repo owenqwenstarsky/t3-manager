@@ -226,7 +226,10 @@ function checkOrThrow(err: string | null): void {
 }
 
 api.post("/git/credentials", async (c) => {
-  const input = await body(c, z.object({ host: z.string(), token: z.string(), username: z.string().optional() }));
+  const input = await body(
+    c,
+    z.object({ host: z.string(), token: z.string(), username: z.string().optional(), allowHttp: z.boolean().optional() }),
+  );
   const parsed = normalizeGitHost(input.host);
   if ("error" in parsed) throw new HttpError(400, parsed.error);
   const token = input.token.trim();
@@ -237,22 +240,38 @@ api.post("/git/credentials", async (c) => {
     throw new HttpError(409, `${parsed.host} already has a token. Change it instead.`);
   }
   settings.update({
-    gitCredentials: [...settings.raw.gitCredentials, { host: parsed.host, token, username: username || undefined, updatedAt: Date.now() }],
+    gitCredentials: [
+      ...settings.raw.gitCredentials,
+      {
+        host: parsed.host,
+        token,
+        username: username || undefined,
+        // An http:// address means the server only speaks plain HTTP.
+        allowHttp: input.allowHttp ?? parsed.scheme === "http",
+        updatedAt: Date.now(),
+      },
+    ],
   });
   return gitReply(c);
 });
 api.put("/git/credentials/:host", async (c) => {
   const host = c.req.param("host").toLowerCase();
   // username: omitted keeps the current one, "" goes back to the default for the host.
-  const input = await body(c, z.object({ token: z.string(), username: z.string().optional() }));
+  // token: omitted keeps the current one (to change only the username or HTTP setting).
+  const input = await body(
+    c,
+    z.object({ token: z.string().optional(), username: z.string().optional(), allowHttp: z.boolean().optional() }),
+  );
   const existing = settings.raw.gitCredentials.find((g) => g.host === host);
   if (!existing) throw new HttpError(404, `No token is set for ${host}`);
-  const token = input.token.trim();
+  const token = input.token?.trim() || existing.token;
   checkOrThrow(validateGitToken(token));
   const username = input.username === undefined ? existing.username : input.username.trim() || undefined;
   checkOrThrow(validateGitUsername(username ?? ""));
   settings.update({
-    gitCredentials: settings.raw.gitCredentials.map((g) => (g.host === host ? { host, token, username, updatedAt: Date.now() } : g)),
+    gitCredentials: settings.raw.gitCredentials.map((g) =>
+      g.host === host ? { host, token, username, allowHttp: input.allowHttp ?? g.allowHttp, updatedAt: Date.now() } : g,
+    ),
   });
   return gitReply(c);
 });

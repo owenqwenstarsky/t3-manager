@@ -27,7 +27,13 @@ describe("normalizeGitHost", () => {
     ["gitea", "gitea"],
     ["token@git.example.com/x", "git.example.com"],
   ])("%s → %s", (input, host) => {
-    expect(normalizeGitHost(input)).toEqual({ host });
+    expect(normalizeGitHost(input)).toMatchObject({ host });
+  });
+  it("remembers the scheme and drops its default port", () => {
+    expect(normalizeGitHost("http://10.77.0.11:3000/owner/bloxblast.git")).toEqual({ host: "10.77.0.11:3000", scheme: "http" });
+    expect(normalizeGitHost("http://git.lan:80/x")).toEqual({ host: "git.lan", scheme: "http" });
+    expect(normalizeGitHost("https://git.lan:443/x")).toEqual({ host: "git.lan", scheme: "https" });
+    expect(normalizeGitHost("git.lan:3000")).toEqual({ host: "git.lan:3000" });
   });
   it.each(["", "git@github.com:org/repo.git", "ssh://git@github.com/x", "exa mple.com", "-bad.com", "host:99999"])(
     "rejects %j",
@@ -57,7 +63,10 @@ describe("git credentials", () => {
         { host: "gitlab.com", token: "glpat-1", updatedAt: 0 },
         { host: "github.com", token: "ghp_2", username: "me", updatedAt: 0 },
       ]),
-    ).toBe("github.com\tme\tghp_2\ngitlab.com\toauth2\tglpat-1\n");
+    ).toBe("github.com\tme\tghp_2\thttps\ngitlab.com\toauth2\tglpat-1\thttps\n");
+    expect(renderGitCredentials([{ host: "10.77.0.11:3000", token: "t", allowHttp: true, updatedAt: 0 }])).toBe(
+      "10.77.0.11:3000\tgit\tt\tany\n",
+    );
   });
 });
 
@@ -92,6 +101,7 @@ describe("generated files with real git", () => {
     renderGitCredentials([
       { host: "github.com", token: "ghp_secret", updatedAt: 0 },
       { host: "git.example.com:8443", token: "tok2", username: "deploy", updatedAt: 0 },
+      { host: "10.77.0.11:3000", token: "gitea_tok", allowHttp: true, updatedAt: 0 },
     ]),
   );
   writeFileSync(
@@ -122,6 +132,11 @@ describe("generated files with real git", () => {
     expect(fill("https://gitlab.com/x.git")).not.toContain("password=");
     expect(fill("https://git.example.com/x.git")).not.toContain("password=");
     expect(fill("http://github.com/x.git")).not.toContain("password=");
+  });
+  it("serves plain HTTP only for servers saved with it allowed", () => {
+    expect(fill("http://10.77.0.11:3000/owner/bloxblast.git")).toContain("username=git\npassword=gitea_tok");
+    expect(fill("https://10.77.0.11:3000/owner/bloxblast.git")).toContain("password=gitea_tok");
+    expect(fill("http://10.77.0.11:3001/x.git")).not.toContain("password=");
   });
   it("ignores store and erase", () => {
     git(["credential", "reject"], "protocol=https\nhost=github.com\nusername=x-access-token\npassword=ghp_secret\n\n");
