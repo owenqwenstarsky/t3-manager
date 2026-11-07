@@ -133,6 +133,7 @@ doesn't invent one; add a rule to include them.
 | Task | How |
 | --- | --- |
 | Update everything | `git pull && docker compose up -d --build`, then **Update** on the Environments page to move environments onto the new image (home files, paired devices and the tailnet address stay; if the new image fails to start, the environment is put back on the old one) |
+| Give every agent the same instructions | **Settings → Agent instructions**: markdown added to `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` in every environment (between `t3-manager instructions` markers), applied right away to running ones |
 | Change the preinstalled tools | Edit the lists in `images/t3-env/toolchains/` and rebuild. See [`docs/toolchains.md`](docs/toolchains.md) |
 | Pin versions | `T3_VERSION`, `CLAUDE_CODE_VERSION`, `CODEX_VERSION` in `.env` |
 | Update the proxy from upstream | see [`services/proxy/T3_PATCHES.md`](services/proxy/T3_PATCHES.md) |

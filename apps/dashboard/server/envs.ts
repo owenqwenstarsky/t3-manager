@@ -35,9 +35,10 @@ import {
   parseGitCheck,
   type GitVars,
 } from "./git.js";
+import { AGENT_APPLY_SCRIPT, agentTarFiles } from "./agents.js";
 import { proxy } from "./proxy.js";
 import { settings } from "./settings.js";
-import type { EnvSummary, GitSyncResult, PairLink, PairedSession } from "./shared/types.js";
+import type { AgentSyncResult, EnvSummary, GitSyncResult, PairLink, PairedSession } from "./shared/types.js";
 
 /**
  * Writes the managed git files into a container (running or stopped). The
@@ -69,6 +70,11 @@ async function checkGit(containerId: string): Promise<{ host: string; protocol: 
     }
   }
   return checks;
+}
+
+/** Writes the global agent instructions file into a container (running or stopped). */
+async function writeAgentFiles(containerId: string): Promise<void> {
+  await putFiles(containerId, "/", agentTarFiles(settings.raw.agentInstructions));
 }
 
 const TS = ["tailscale", "--socket=/var/run/tailscale/tailscaled.sock"];
@@ -183,6 +189,7 @@ async function startEnvContainer(input: {
   if (input.proxyKey) files.push({ name: "proxy_key", content: input.proxyKey });
   if (files.length) await putFiles(container.id, "/etc/t3m", files);
   await writeGitFiles(container.id, { env: input.name, owner: input.owner, hostname: input.hostname });
+  await writeAgentFiles(container.id);
   if (input.start !== false) await container.start();
   return container;
 }
@@ -298,6 +305,37 @@ export const envs = {
     result.failed.sort((a, b) => a.env.localeCompare(b.env));
     result.checks.sort((a, b) => a.env.localeCompare(b.env) || a.host.localeCompare(b.host));
     result.unchecked.sort();
+    return result;
+  },
+
+  /**
+   * Pushes the global agent instructions into every environment, and in running
+   * ones rewrites ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md right away.
+   */
+  async syncAgents(): Promise<AgentSyncResult> {
+    const result: AgentSyncResult = { synced: 0, applied: [], unchecked: [], outdated: [], failed: [] };
+    const list = await listEnvContainers();
+    await Promise.all(
+      list.map(async (c) => {
+        const env = c.Labels[LABEL_NAME] ?? c.Names[0]?.replace(/^\//, "") ?? c.Id;
+        try {
+          await writeAgentFiles(c.Id);
+          result.synced++;
+          if (c.State !== "running") {
+            result.unchecked.push(env);
+            return;
+          }
+          const res = await exec(c.Id, ["sh", "-c", AGENT_APPLY_SCRIPT], { user: "dev", env: ["HOME=/home/dev"], timeoutMs: 20_000 });
+          if (res.stdout.includes("missing")) result.outdated.push(env);
+          else if (res.exitCode === 0 && res.stdout.includes("applied")) result.applied.push(env);
+          else throw new Error((res.stderr || res.stdout).trim().slice(0, 300) || `exit code ${res.exitCode}`);
+        } catch (e) {
+          result.failed.push({ env, error: (e as Error).message });
+        }
+      }),
+    );
+    result.failed.sort((a, b) => a.env.localeCompare(b.env));
+    for (const k of ["applied", "unchecked", "outdated"] as const) result[k].sort();
     return result;
   },
 

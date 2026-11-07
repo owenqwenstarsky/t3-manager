@@ -23,6 +23,8 @@ interface StoredSettings {
   /** Tokens never leave the server: public() only exposes hosts. */
   gitCredentials: GitCredential[];
   gitAuthor: GitAuthorSettings;
+  /** Global agent instructions (markdown) pushed into every environment. */
+  agentInstructions: string;
 }
 
 const file = () => path.join(config.dataDir, "settings.json");
@@ -44,6 +46,7 @@ function load(): StoredSettings {
     envs: stored.envs ?? {},
     gitCredentials: stored.gitCredentials ?? [],
     gitAuthor: { ...DEFAULT_GIT_AUTHOR, ...stored.gitAuthor },
+    agentInstructions: stored.agentInstructions ?? "",
   };
 }
 
@@ -91,6 +94,7 @@ export const settings = {
         .map((g) => ({ host: g.host, customUsername: !!g.username, allowHttp: !!g.allowHttp, updatedAt: g.updatedAt }))
         .sort((a, b) => a.host.localeCompare(b.host)),
       gitAuthor: current.gitAuthor,
+      agentInstructions: current.agentInstructions,
     };
   },
 };
