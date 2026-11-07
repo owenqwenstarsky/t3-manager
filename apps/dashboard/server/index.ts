@@ -110,6 +110,11 @@ api.delete("/envs/:name/sessions/:id", async (c) => {
 
 // --- accounts (model proxy) ------------------------------------------------
 api.get("/accounts", async (c) => c.json(await proxy.accounts()));
+api.get("/accounts/limits", async (c) => c.json(await proxy.limits({ id: c.req.query("id") || undefined })));
+api.post("/accounts/limits/refresh", async (c) => {
+  const { id } = await body(c, z.object({ id: z.string().optional() }));
+  return c.json(await proxy.limits({ refresh: true, id }));
+});
 api.post("/accounts/:name/disabled", async (c) => {
   const { disabled } = await body(c, z.object({ disabled: z.boolean() }));
   await proxy.setAccountDisabled(c.req.param("name"), disabled);

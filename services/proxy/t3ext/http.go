@@ -18,6 +18,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -33,14 +34,19 @@ func ServerOptions() []api.ServerOption {
 		log.WithError(err).Error("t3ext: routes disabled because the usage store failed to open")
 		return nil
 	}
-	return []api.ServerOption{api.WithRouterConfigurator(func(e *gin.Engine, _ *handlers.BaseAPIHandler, cfg *config.Config) {
-		Mount(e, cfg)
+	return []api.ServerOption{api.WithRouterConfigurator(func(e *gin.Engine, base *handlers.BaseAPIHandler, cfg *config.Config) {
+		var mgr *coreauth.Manager
+		if base != nil {
+			mgr = base.AuthManager
+		}
+		Mount(e, cfg, mgr)
 	})}
 }
 
-// Mount registers t3ext routes on an engine.
-func Mount(e *gin.Engine, cfg *config.Config) {
-	h := &handler{cfg: cfg, devices: map[string]*deviceSession{}}
+// Mount registers t3ext routes on an engine. auths may be nil, which leaves
+// /limits empty.
+func Mount(e *gin.Engine, cfg *config.Config, auths *coreauth.Manager) {
+	h := &handler{cfg: cfg, auths: auths, limits: NewLimitsCache(nil), devices: map[string]*deviceSession{}}
 	e.GET("/t3/v1/health", h.health)
 	g := e.Group("/t3/v1", requireManagementKey())
 	g.GET("/usage/summary", h.summary)
@@ -49,6 +55,7 @@ func Mount(e *gin.Engine, cfg *config.Config) {
 	g.GET("/usage/events", h.events)
 	g.GET("/usage/live", h.live)
 	g.GET("/usage/export.csv", h.exportCSV)
+	g.GET("/limits", h.listLimits)
 	g.GET("/keys", h.listKeys)
 	g.PUT("/keys/:key", h.putKey)
 	g.DELETE("/keys/:key", h.deleteKey)
@@ -82,7 +89,9 @@ func requireManagementKey() gin.HandlerFunc {
 }
 
 type handler struct {
-	cfg *config.Config
+	cfg    *config.Config
+	auths  *coreauth.Manager
+	limits *LimitsCache
 
 	mu      sync.Mutex
 	devices map[string]*deviceSession
@@ -408,4 +417,44 @@ func (h *handler) cancelDevice(c *gin.Context) {
 		sess.cancel()
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// listLimits returns subscription limits for every Claude and ChatGPT OAuth
+// credential. Live lookups are cached for five minutes per credential;
+// ?refresh=1 asks for a new lookup (at most every 30 seconds), and ?id= narrows
+// the result to one credential.
+func (h *handler) listLimits(c *gin.Context) {
+	if h.auths == nil {
+		c.JSON(http.StatusOK, gin.H{"accounts": []AccountLimits{}, "ttl_seconds": int(limitsTTL.Seconds())})
+		return
+	}
+	force := c.Query("refresh") == "1" || c.Query("refresh") == "true"
+	only := strings.TrimSpace(c.Query("id"))
+	var targets []*coreauth.Auth
+	keep := map[string]bool{}
+	for _, a := range h.auths.List() {
+		if a == nil || !limitsProvider(a.Provider) {
+			continue
+		}
+		keep[a.ID] = true
+		if only != "" && a.ID != only && a.Index != only {
+			continue
+		}
+		a.EnsureIndex()
+		targets = append(targets, a)
+	}
+	if only == "" {
+		h.limits.Forget(keep)
+	}
+	out := make([]AccountLimits, len(targets))
+	var wg sync.WaitGroup
+	for i, a := range targets {
+		wg.Add(1)
+		go func(i int, a *coreauth.Auth) {
+			defer wg.Done()
+			out[i] = h.limits.Snapshot(c.Request.Context(), h.cfg, a, force)
+		}(i, a)
+	}
+	wg.Wait()
+	c.JSON(http.StatusOK, gin.H{"accounts": out, "ttl_seconds": int(limitsTTL.Seconds())})
 }

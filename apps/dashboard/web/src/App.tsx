@@ -71,15 +71,16 @@ export function App() {
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-40 border-b border-line bg-surface/85 backdrop-blur">
-        <div className="mx-auto max-w-[1440px] px-4 sm:px-6 h-14 flex items-center gap-6">
-          <div className="flex items-center gap-2 font-semibold">
+        <div className="mx-auto max-w-[1440px] px-4 sm:px-6 h-14 flex items-center gap-3 sm:gap-6">
+          <div className="flex shrink-0 items-center gap-2 font-semibold">
             <img src="/favicon.svg" alt="" className="size-6" />
-            <span>T3 Manager</span>
+            <span className="hidden sm:inline">T3 Manager</span>
           </div>
-          <nav className="flex gap-1 overflow-x-auto">
+          <nav className="flex min-w-0 gap-1 overflow-x-auto">
             {NAV.map((n) => (
               <button
                 key={n.id}
+                aria-label={n.label}
                 onClick={() => {
                   if (n.id === "usage") setUsageEnv(undefined);
                   go(n.id);
@@ -90,7 +91,7 @@ export function App() {
                 )}
               >
                 {n.icon}
-                {n.label}
+                <span className="hidden sm:inline">{n.label}</span>
               </button>
             ))}
           </nav>

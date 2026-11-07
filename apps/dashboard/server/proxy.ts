@@ -1,5 +1,5 @@
 import { config } from "./config.js";
-import type { Account } from "./shared/types.js";
+import type { Account, LimitsResponse } from "./shared/types.js";
 
 export class ProxyError extends Error {
   constructor(
@@ -173,6 +173,15 @@ export const proxy = {
   },
   async deviceCancel(id: string): Promise<void> {
     await call("DELETE", `/t3/v1/oauth/codex-device/${encodeURIComponent(id)}`);
+  },
+
+  // --- subscription limits (cached 5 min per account in the proxy) ------------
+  async limits(opts: { refresh?: boolean; id?: string } = {}): Promise<LimitsResponse> {
+    const data = await call<LimitsResponse>("GET", "/t3/v1/limits", undefined, {
+      refresh: opts.refresh ? "1" : undefined,
+      id: opts.id,
+    });
+    return { accounts: data.accounts ?? [], ttl_seconds: data.ttl_seconds ?? 300 };
   },
 
   // --- usage ------------------------------------------------------------------

@@ -154,6 +154,36 @@ export interface Account {
   recent: { time: string; success: number; failed: number }[];
 }
 
+export interface LimitWindow {
+  id: string;
+  label: string;
+  used_percent: number;
+  resets_at?: string;
+  window_seconds?: number;
+}
+
+/** Subscription limits for one account, from GET /t3/v1/limits. */
+export interface AccountLimits {
+  auth_id: string;
+  auth_index?: string;
+  provider: string;
+  plan?: string;
+  /** live: provider usage endpoint (cached 5 min); headers: last proxied response; none: nothing yet. */
+  source: "live" | "headers" | "none";
+  observed_at?: string;
+  fetched_at?: string;
+  limit_reached: boolean;
+  windows: LimitWindow[];
+  extra_usage?: { enabled: boolean; used_percent?: number; used_credits?: number; monthly_limit?: number };
+  credits?: { has_credits: boolean; unlimited: boolean; balance?: string };
+  error?: string;
+}
+
+export interface LimitsResponse {
+  accounts: AccountLimits[];
+  ttl_seconds: number;
+}
+
 export interface OAuthStart {
   provider: "claude" | "codex";
   mode: "redirect" | "device";

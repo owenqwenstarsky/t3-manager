@@ -62,6 +62,25 @@ ready. So environments need no per-user login.
   Cache read and cache write are separate. This holds for every provider and
   makes cost a simple dot product with the price table.
 
+## Subscription limits (`services/proxy/t3ext/limits.go`)
+
+Token counts say what an account *served*. The 5-hour and weekly limits are
+the provider's own numbers, so `t3ext` reads them from the provider:
+
+- **Live check.** It calls the same usage endpoint each provider's CLI uses
+  (Anthropic `/api/oauth/usage`, ChatGPT `/backend-api/wham/usage`) with the
+  account's own token.
+- **Caching.** Each account is checked at most every 5 minutes, and requests in
+  flight are shared. That keeps the dashboard from creating provider traffic or
+  tripping their rate limits.
+- **Passive updates.** Every proxied response carries rate-limit headers, which
+  upstream already records. When those are newer than the cached check, they
+  replace the 5-hour and weekly numbers, so values stay current between checks
+  at no cost. If a live check fails, the headers alone are shown, with the
+  error.
+- **After a reset.** If a window's reset time has passed since the last
+  reading, the dashboard shows it as full again.
+
 ## Proxy fork policy
 
 `services/proxy` is a squashed `git subtree` of upstream. Changes are new

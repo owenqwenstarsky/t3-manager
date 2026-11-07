@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { formatResetsIn, splitWindows, viewWindow } from "../server/shared/limits.js";
 import {
   buildPairLinks,
   derivePhase,
@@ -126,5 +127,46 @@ describe("pricing", () => {
     expect(acc.unpriced_tokens).toBe(100);
     expect(acc.requests).toBe(4);
     expect(acc.avg_latency_ms).toBe(1750);
+  });
+});
+
+describe("subscription limits", () => {
+  const now = Date.parse("2026-11-07T12:00:00Z");
+  it("formats time until reset", () => {
+    expect(formatResetsIn(30_000)).toBe("1m");
+    expect(formatResetsIn(45 * 60_000)).toBe("45m");
+    expect(formatResetsIn((2 * 60 + 14) * 60_000)).toBe("2h 14m");
+    expect(formatResetsIn(3 * 3600_000)).toBe("3h");
+    expect(formatResetsIn((3 * 24 + 4) * 3600_000)).toBe("3d 4h");
+  });
+  it("computes remaining and tone", () => {
+    const v = viewWindow({ id: "5h", label: "5-hour", used_percent: 85, resets_at: "2026-11-07T13:30:00Z" }, now);
+    expect(v.remaining).toBe(15);
+    expect(v.tone).toBe("warning");
+    expect(v.resetsIn).toBe("1h 30m");
+    expect(viewWindow({ id: "7d", label: "Weekly", used_percent: 100 }, now).tone).toBe("critical");
+    expect(viewWindow({ id: "7d", label: "Weekly", used_percent: 10 }, now).tone).toBe("good");
+  });
+  it("treats a passed reset as a fresh window", () => {
+    const v = viewWindow({ id: "5h", label: "5-hour", used_percent: 97, resets_at: "2026-11-07T11:59:00Z" }, now);
+    expect(v.hasReset).toBe(true);
+    expect(v.remaining).toBe(100);
+    expect(v.resetsIn).toBeUndefined();
+  });
+  it("puts 5-hour and weekly first", () => {
+    const { main, other } = splitWindows(
+      {
+        auth_id: "a", provider: "claude", source: "live", limit_reached: false,
+        windows: [
+          { id: "7d_opus", label: "Weekly · Opus", used_percent: 1 },
+          { id: "7d", label: "Weekly", used_percent: 2 },
+          { id: "5h", label: "5-hour", used_percent: 3 },
+        ],
+      },
+      now,
+    );
+    expect(main.map((v) => v.id)).toEqual(["5h", "7d"]);
+    expect(other.map((v) => v.id)).toEqual(["7d_opus"]);
+    expect(splitWindows(undefined, now)).toEqual({ main: [], other: [] });
   });
 });

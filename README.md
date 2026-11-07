@@ -98,6 +98,11 @@ image, so it exits right away. Once the stack is up, the dashboard is at
 3. **Get pair link.** The person scans the QR code with the T3 Code app, or opens
    the link. Each link works once and expires (15 minutes by default). Revoke
    devices under **⋯ → Paired devices**.
+   Each account shows how much of its **5-hour and weekly limits** is left and
+   when each resets (plus Opus/Sonnet or other extra windows where the
+   provider reports them). The proxy asks Anthropic/OpenAI at most every 5
+   minutes per account and updates the numbers from every request in between.
+   **⋯ → Check limits now** forces a fresh check.
 4. **Usage.** Pick a range (1H … 1Y, or custom), an interval, a grouping
    (environment / account / model / provider) and a metric (cost / tokens /
    requests). Select a breakdown row to filter by it.
