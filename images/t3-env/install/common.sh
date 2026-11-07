@@ -56,3 +56,11 @@ try_install() {
   record_missing "$label"
   return 0
 }
+
+# Reads `apt-cache policy pkg...` output on stdin and prints the packages that
+# have a real install candidate (virtual or unknown packages are left out).
+# awk reads all of its input, so this is safe under pipefail.
+apt_candidates() {
+  awk '/^[^[:space:]].*:$/ { pkg = substr($0, 1, length($0) - 1); next }
+       /^[[:space:]]+Candidate:/ { if (pkg != "" && $2 != "(none)") print pkg; pkg = "" }'
+}

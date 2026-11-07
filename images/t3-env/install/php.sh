@@ -11,18 +11,30 @@ echo "deb [signed-by=/usr/share/keyrings/debsuryorg-archive-keyring.gpg] https:/
   > /etc/apt/sources.list.d/php.list
 apt-get update
 
-pkgs=()
-for v in $(pick_words "$PHP_VERSIONS"); do
-  for ext in $PHP_EXTENSIONS; do
-    # Some extensions are built in for newer versions (e.g. opcache in 8.5),
-    # where the package is missing or only virtual: install real candidates only.
-    if apt-cache policy "php$v-$ext" 2>/dev/null | grep -q 'Candidate: [^(]'; then pkgs+=("php$v-$ext"); fi
-  done
+mapfile -t versions < <(pick_words "$PHP_VERSIONS")
+default=${versions[0]}
+names=()
+for v in "${versions[@]}"; do
+  for ext in $PHP_EXTENSIONS; do names+=("php$v-$ext"); done
 done
+# Some extensions are built in for newer versions (e.g. opcache in 8.5), where
+# the package is missing or only virtual: keep real candidates only.
+policy=$(apt-cache policy "${names[@]}" 2>/dev/null || true)
+mapfile -t pkgs < <(printf '%s\n' "$policy" | apt_candidates)
+for v in "${versions[@]}"; do
+  if [[ " ${pkgs[*]} " != *" php$v-cli "* ]]; then
+    echo "PHP $v isn't available from packages.sury.org for $codename. Edit images/t3-env/toolchains/php.conf." >&2
+    exit 1
+  fi
+done
+log "installing ${#pkgs[@]} PHP packages: ${pkgs[*]}"
 apt-get install -y --no-install-recommends "${pkgs[@]}"
 rm -rf /var/lib/apt/lists/*
 
-default=$(pick_words "$PHP_VERSIONS" | head -n 1)
+if [ ! -x "/usr/bin/php$default" ]; then
+  echo "php$default did not install (/usr/bin/php$default is missing)" >&2
+  exit 1
+fi
 update-alternatives --set php "/usr/bin/php$default"
 
 # Composer: the latest stable phar, checked against its published checksum.

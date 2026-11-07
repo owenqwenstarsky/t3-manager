@@ -88,3 +88,4 @@ jobs:
           shellcheck -x images/t3-env/entrypoint.sh images/t3-env/lib/*.sh images/t3-env/install/*.sh \
             images/t3-env/test/smoke.sh images/t3-env/profile/bashrc.sh \
             apps/dashboard/docker-entrypoint.sh services/proxy/t3ext/docker-entrypoint.sh
+      - run: bash images/t3-env/test/php-select.sh

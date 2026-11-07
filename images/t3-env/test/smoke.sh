@@ -97,7 +97,8 @@ func main() { fmt.Println("hello") }
 G
 expect "go build" hello bash -c 'cd gohello && go mod init example.com/hello >/dev/null 2>&1 && go build -o h . && ./h'
 expect "cargo build" "Hello, world!" bash -c 'cargo new --quiet rusthello && cd rusthello && cargo run --quiet --offline'
-if rustup toolchain list | grep -q '^nightly'; then
+toolchains=$(rustup toolchain list)
+if [[ $toolchains == *nightly* ]]; then
   expect "cargo +nightly" "nightly" bash -c 'cd rusthello && cargo +nightly --version'
 fi
 expect "ruby" hello ruby -e 'puts "hello"'
