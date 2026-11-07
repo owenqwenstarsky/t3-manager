@@ -296,41 +296,73 @@ func parseRollupKey(k []byte) (hour int64, combo string, values []string, ok boo
 	return hour, parts[0], parts[1:], true
 }
 
-// Record stores an event and updates every rollup it contributes to.
+// Record stores one event. See RecordBatch.
 func (s *Store) Record(e Event) error {
-	if e.TS == 0 {
-		e.TS = s.now().UnixMilli()
+	return s.RecordBatch([]Event{e})
+}
+
+// RecordBatch stores events and updates every rollup they contribute to in a
+// single transaction. Rollup deltas are merged in memory first, so each
+// rollup row is read and written once per batch.
+func (s *Store) RecordBatch(events []Event) error {
+	if len(events) == 0 {
+		return nil
 	}
-	raw, err := json.Marshal(&e)
-	if err != nil {
-		return err
+	type pending struct {
+		key []byte
+		agg Agg
 	}
-	hour := hourStart(e.TS)
-	return s.db.Batch(func(tx *bbolt.Tx) error {
-		if errPut := tx.Bucket(bucketEvents).Put(eventKey(e.TS, e.ID), raw); errPut != nil {
-			return errPut
+	deltas := map[string]*pending{}
+	raws := make([][]byte, len(events))
+	keys := make([][]byte, len(events))
+	for i := range events {
+		e := &events[i]
+		if e.TS == 0 {
+			e.TS = s.now().UnixMilli()
 		}
-		hb := tx.Bucket(bucketHourly)
+		raw, err := json.Marshal(e)
+		if err != nil {
+			return err
+		}
+		raws[i], keys[i] = raw, eventKey(e.TS, e.ID)
+		hour := hourStart(e.TS)
 		for _, combo := range rollupCombos {
 			values := make([]string, len(combo))
-			for i, d := range combo {
-				values[i] = e.dimValue(d)
+			for j, d := range combo {
+				values[j] = e.dimValue(d)
 			}
 			k := rollupKey(hour, combo, values)
+			p := deltas[string(k)]
+			if p == nil {
+				p = &pending{key: k}
+				deltas[string(k)] = p
+			}
+			p.agg.addEvent(e)
+		}
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		eb := tx.Bucket(bucketEvents)
+		for i := range raws {
+			if err := eb.Put(keys[i], raws[i]); err != nil {
+				return err
+			}
+		}
+		hb := tx.Bucket(bucketHourly)
+		for _, p := range deltas {
 			var agg Agg
-			if existing := hb.Get(k); existing != nil {
-				if errDecode := json.Unmarshal(existing, &agg); errDecode != nil {
-					log.WithError(errDecode).Warn("t3ext: resetting corrupt rollup")
+			if existing := hb.Get(p.key); existing != nil {
+				if err := json.Unmarshal(existing, &agg); err != nil {
+					log.WithError(err).Warn("t3ext: resetting corrupt rollup")
 					agg = Agg{}
 				}
 			}
-			agg.addEvent(&e)
-			encoded, errEncode := json.Marshal(&agg)
-			if errEncode != nil {
-				return errEncode
+			agg.merge(&p.agg)
+			encoded, err := json.Marshal(&agg)
+			if err != nil {
+				return err
 			}
-			if errPut := hb.Put(k, encoded); errPut != nil {
-				return errPut
+			if err = hb.Put(p.key, encoded); err != nil {
+				return err
 			}
 		}
 		return nil

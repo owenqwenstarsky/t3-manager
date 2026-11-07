@@ -260,3 +260,32 @@ func TestEventFromRecordNormalisesTokens(t *testing.T) {
 		t.Fatalf("independent normalisation wrong: %+v", e)
 	}
 }
+
+func TestRecordBatchMatchesSingleWrites(t *testing.T) {
+	a := newTestStore(t, base.Add(3*time.Hour))
+	seed(t, a)
+	var events []Event
+	_ = a.scanEvents(0, base.Add(10*time.Hour).UnixMilli(), func(e *Event) bool {
+		events = append(events, *e)
+		return true
+	})
+	b := newTestStore(t, base.Add(3*time.Hour))
+	// Split across two batches that share rollup rows.
+	if err := b.RecordBatch(events[:5]); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.RecordBatch(events[5:]); err != nil {
+		t.Fatal(err)
+	}
+	q := Query{From: base.UnixMilli(), To: base.Add(3 * time.Hour).UnixMilli(), Step: "hour", Group: []string{DimKey, DimModel}}
+	ra, _ := a.Timeseries(q)
+	rb, _ := b.Timeseries(q)
+	if ra.Total != rb.Total || len(ra.Series) != len(rb.Series) {
+		t.Fatalf("batch differs:\n%+v\n%+v", ra.Total, rb.Total)
+	}
+	for i := range ra.Series {
+		if ra.Series[i].Total != rb.Series[i].Total {
+			t.Fatalf("series %d differs", i)
+		}
+	}
+}

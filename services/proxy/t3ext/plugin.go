@@ -92,6 +92,48 @@ func Fingerprint(apiKey string) string {
 
 type usagePlugin struct{}
 
+var (
+	writerOnce sync.Once
+	writerCh   chan Event
+)
+
+// Writes are batched: one transaction per flush keeps the proxy's usage
+// dispatcher from waiting on disk for every request.
+const (
+	writerQueue    = 20000
+	writerMaxBatch = 1000
+	writerInterval = 250 * time.Millisecond
+)
+
+func startWriter(s *Store) {
+	writerCh = make(chan Event, writerQueue)
+	go func() {
+		ticker := time.NewTicker(writerInterval)
+		defer ticker.Stop()
+		batch := make([]Event, 0, writerMaxBatch)
+		flush := func() {
+			if len(batch) == 0 {
+				return
+			}
+			if err := s.RecordBatch(batch); err != nil {
+				log.WithError(err).Warnf("t3ext: failed to record %d usage events", len(batch))
+			}
+			batch = batch[:0]
+		}
+		for {
+			select {
+			case e := <-writerCh:
+				batch = append(batch, e)
+				if len(batch) >= writerMaxBatch {
+					flush()
+				}
+			case <-ticker.C:
+				flush()
+			}
+		}
+	}()
+}
+
 func (p *usagePlugin) HandleUsage(_ context.Context, record coreusage.Record) {
 	if !Enabled() || !coreusage.GenerateEnabled(record.Generate) {
 		return
@@ -100,8 +142,11 @@ func (p *usagePlugin) HandleUsage(_ context.Context, record coreusage.Record) {
 	if err != nil {
 		return
 	}
-	if errRecord := s.Record(EventFromRecord(record)); errRecord != nil {
-		log.WithError(errRecord).Warn("t3ext: failed to record usage")
+	writerOnce.Do(func() { startWriter(s) })
+	select {
+	case writerCh <- EventFromRecord(record):
+	default:
+		log.Warn("t3ext: usage queue full; dropping an event")
 	}
 }
 
