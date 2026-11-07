@@ -5,3 +5,4 @@ deploy/data/
 *.log
 .DS_Store
 coverage/
+apps/dashboard/data/
