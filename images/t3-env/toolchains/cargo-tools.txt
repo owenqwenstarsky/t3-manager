@@ -1,0 +1,10 @@
+# Installed with cargo-binstall (prebuilt where available) into /opt/rust/cargo/bin.
+cargo-nextest
+cargo-watch
+cargo-edit
+cargo-expand
+cargo-audit
+cargo-deny
+sccache
+wasm-pack
+trunk

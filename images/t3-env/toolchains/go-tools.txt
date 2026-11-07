@@ -1,0 +1,5 @@
+# go install targets, built with the default Go into /opt/t3m/bin.
+golang.org/x/tools/gopls@latest
+golang.org/x/tools/cmd/goimports@latest
+github.com/go-delve/delve/cmd/dlv@latest
+code.gitea.io/tea@latest

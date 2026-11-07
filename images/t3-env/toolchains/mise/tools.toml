@@ -1,0 +1,46 @@
+# Global tools from mise (/etc/mise/conf.d/50-tools.toml), "latest" at build time.
+# Add a line to add a tool; any tool in `mise registry` works.
+[tools]
+# JavaScript
+bun = "latest"
+deno = "latest"
+pnpm = "latest"
+yarn = "1"
+"npm:typescript" = "latest"
+"npm:tsx" = "latest"
+"npm:prettier" = "latest"
+"npm:eslint" = "latest"
+"npm:npm-check-updates" = "latest"
+
+# Python
+uv = "latest"
+
+# JVM
+maven = "latest"
+kotlin = "latest"
+
+# Go
+golangci-lint = "latest"
+staticcheck = "latest"
+air = "latest"
+
+# Rust
+cargo-binstall = "latest"
+
+# Git forges
+gh = "latest"
+glab = "latest"
+lazygit = "latest"
+
+# Build / codegen / lint
+protoc = "latest"
+buf = "latest"
+task = "latest"
+yq = "latest"
+taplo = "latest"
+hadolint = "latest"
+actionlint = "latest"
+watchexec = "latest"
+
+# Databases
+mongosh = "latest"

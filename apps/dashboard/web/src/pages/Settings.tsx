@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GitBranch, KeyRound, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { GitBranch, KeyRound, Package, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { defaultGitUsername, fillTemplate, normalizeGitHost } from "../../../server/git";
-import type { EnvSummary, GitSyncResult, PriceRule, Settings } from "../../../server/shared/types";
+import type { EnvSummary, GitSyncResult, ImageInfo, PriceRule, Settings } from "../../../server/shared/types";
 import { Button, Card, Field, Modal, Notice, SectionTitle, Spinner, Toggle, inputClass, cx } from "../components/ui";
 import { api } from "../lib/api";
 import { ago } from "../lib/format";
@@ -27,6 +27,7 @@ export function SettingsPage() {
       </div>
       {save.error && <Notice tone="critical">{(save.error as Error).message}</Notice>}
       <TailnetCard s={s} onSave={(p) => save.mutate(p)} saving={save.isPending} />
+      <ImageCard image={s.image} />
       <GitCard s={s} />
       <PricingCard s={s} onSave={(pricing) => save.mutate({ pricing })} saving={save.isPending} />
     </div>
@@ -76,6 +77,78 @@ function TailnetCard({ s, onSave, saving }: { s: SettingsResponse; onSave: (p: {
           </div>
         </div>
       </div>
+    </Card>
+  );
+}
+
+/** What the environment image contains, read from the image itself. */
+function ImageCard({ image }: { image: string }) {
+  const q = useQuery({ queryKey: ["image", image], queryFn: () => api<ImageInfo>("/image"), staleTime: 60_000 });
+  const info = q.data;
+  const tc = info?.toolchains;
+  return (
+    <Card className="p-5">
+      <SectionTitle
+        title="Environment tools"
+        subtitle={
+          <>
+            Every environment gets these preinstalled. Other versions install on first use (for example{" "}
+            <code className="font-mono text-xs">mise use node@18</code>) and are kept in the environment's home folder. To change the list, edit{" "}
+            <code className="font-mono text-xs">images/t3-env/toolchains/</code> and rebuild the image.
+          </>
+        }
+      />
+      {q.isLoading ? (
+        <Spinner />
+      ) : q.error ? (
+        <Notice tone="critical">{(q.error as Error).message}</Notice>
+      ) : info?.missing ? (
+        <Notice tone="warning" title={`Image ${info.name} is not built`}>
+          Run <code className="font-mono text-xs">docker compose build</code> on the host to build it.
+        </Notice>
+      ) : !tc ? (
+        <Notice tone="info" title="This image doesn't list its tools">
+          It was built before toolchains were added. Rebuild it with <code className="font-mono text-xs">docker compose build t3-env-image</code>, then update
+          your environments from the Environments page.
+        </Notice>
+      ) : (
+        <>
+          <div className="text-xs text-ink-3 mb-3 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="inline-flex items-center gap-1">
+              <Package className="size-3.5" />
+              <span className="font-mono">{info.name}</span>
+            </span>
+            <span>built {ago(Date.parse(tc.built || info.created || ""))}</span>
+            {tc.toolchains === "minimal" && <span className="text-ink-2">minimal build: one version per language</span>}
+          </div>
+          <div className="grid md:grid-cols-2 gap-x-6 gap-y-3">
+            {tc.languages.map((l) => (
+              <div key={l.name} className="min-w-0">
+                <div className="text-sm font-medium">{l.name}</div>
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {l.versions.map((v) => (
+                    <span
+                      key={v}
+                      className={cx(
+                        "rounded-md px-1.5 py-0.5 font-mono text-[11px] border",
+                        v === l.default ? "border-accent bg-accent-wash text-ink" : "border-line text-ink-2",
+                      )}
+                      title={v === l.default ? "Default" : undefined}
+                    >
+                      {v}
+                    </span>
+                  ))}
+                </div>
+                {l.tools && <div className="text-xs text-ink-3 mt-1">{l.tools}</div>}
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-ink-3 mt-4">
+            Also: git, gh, glab, tea, jq, yq, ripgrep, fd, fzf, tmux, protoc, buf, shellcheck, database clients (psql, mariadb, redis-cli,
+            mongosh, sqlite3) and headless Chromium. Docker is not available inside environments.
+          </p>
+        </>
+      )}
     </Card>
   );
 }

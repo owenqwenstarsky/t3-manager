@@ -33,6 +33,25 @@ export interface EnvSummary {
   proxyKeyFingerprint?: string;
   agentsConfigured: boolean;
   image: string;
+  /** The container runs an older build than the current environment image. */
+  imageOutdated: boolean;
+}
+
+/** What an environment image contains (written at build time to /usr/local/share/t3m/toolchains.json). */
+export interface ImageToolchains {
+  built: string;
+  toolchains: string;
+  languages: { name: string; tools: string; default: string; versions: string[] }[];
+}
+
+export interface ImageInfo {
+  name: string;
+  /** Not built yet. */
+  missing?: boolean;
+  id?: string;
+  created?: string;
+  /** Null for images built before toolchains were listed. */
+  toolchains?: ImageToolchains | null;
 }
 
 export interface PairLink {

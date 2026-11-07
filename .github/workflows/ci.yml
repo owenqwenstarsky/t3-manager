@@ -47,9 +47,6 @@ jobs:
           - name: dashboard
             context: .
             file: apps/dashboard/Dockerfile
-          - name: t3-env
-            context: images/t3-env
-            file: images/t3-env/Dockerfile
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -61,10 +58,33 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
+  # The full environment image is ~10-13 GB, more than a hosted runner has
+  # room for, so CI builds the minimal variant (same scripts, one version per
+  # language) and runs the smoke test in it.
+  t3-env:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: images/t3-env
+          push: false
+          load: true
+          tags: t3-env:ci
+          build-args: TOOLCHAINS=minimal
+          secrets: github_token=${{ secrets.GITHUB_TOKEN }}
+          cache-from: type=gha,scope=t3-env
+          cache-to: type=gha,mode=max,scope=t3-env
+      - run: docker run --rm --user dev --entrypoint /usr/local/lib/t3m/smoke.sh -e SMOKE_NETWORK=1 t3-env:ci
+
   shell:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: |
-          shellcheck images/t3-env/entrypoint.sh images/t3-env/lib/configure-agents.sh \
+          shellcheck -x images/t3-env/entrypoint.sh images/t3-env/lib/*.sh images/t3-env/install/*.sh \
+            images/t3-env/test/smoke.sh images/t3-env/profile/bashrc.sh \
             apps/dashboard/docker-entrypoint.sh services/proxy/t3ext/docker-entrypoint.sh

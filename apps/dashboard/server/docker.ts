@@ -2,6 +2,7 @@ import Docker from "dockerode";
 import { PassThrough } from "node:stream";
 import tar from "tar-stream";
 import { config } from "./config.js";
+import type { ImageInfo, ImageToolchains } from "./shared/types.js";
 
 export const docker = new Docker({ socketPath: config.dockerSocket });
 
@@ -189,4 +190,86 @@ export async function removeEnvContainer(name: string, purgeVolumes: boolean): P
       await docker.getVolume(vol).remove().catch(() => undefined);
     }
   }
+}
+
+export const TOOLCHAINS_FILE = "/usr/local/share/t3m/toolchains.json";
+
+/**
+ * Returns the content of the first regular file in a tar archive whose path is
+ * `name` or ends in `/name`, or null when there is none.
+ */
+export async function readTarEntry(archive: NodeJS.ReadableStream | Buffer, name: string): Promise<string | null> {
+  const extract = tar.extract();
+  let found: string | null = null;
+  const done = new Promise<void>((resolve, reject) => {
+    extract.on("entry", (header, stream, next) => {
+      const path = header.name.replace(/^(\.\/)+/, "");
+      const match = found === null && header.type === "file" && (path === name || path.endsWith(`/${name}`));
+      const chunks: Buffer[] = [];
+      stream.on("data", (c: unknown) => {
+        if (match) chunks.push(c as Buffer);
+      });
+      stream.on("end", () => {
+        if (match) found = Buffer.concat(chunks).toString("utf8");
+        next();
+      });
+      stream.resume();
+    });
+    extract.on("finish", resolve);
+    extract.on("error", reject);
+  });
+  if (Buffer.isBuffer(archive)) extract.end(archive);
+  else archive.pipe(extract);
+  await done;
+  return found;
+}
+
+export function parseToolchains(text: string | null): ImageToolchains | null {
+  if (!text) return null;
+  try {
+    const j = JSON.parse(text) as ImageToolchains;
+    if (!Array.isArray(j.languages)) return null;
+    return {
+      built: String(j.built ?? ""),
+      toolchains: String(j.toolchains ?? ""),
+      languages: j.languages
+        .filter((l) => l && typeof l.name === "string" && Array.isArray(l.versions))
+        .map((l) => ({ name: l.name, tools: String(l.tools ?? ""), default: String(l.default ?? l.versions[0] ?? ""), versions: l.versions.map(String) })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+const toolchainsCache = new Map<string, ImageToolchains | null>();
+
+/** Reads a file from an image without running it: a created (never started) container. */
+async function readImageFile(image: string, path: string): Promise<string | null> {
+  const c = await docker.createContainer({ Image: image, Entrypoint: ["/bin/true"], Cmd: [], NetworkDisabled: true, Labels: { "t3m.probe": "1" } });
+  try {
+    const archive = (await c.getArchive({ path })) as NodeJS.ReadableStream;
+    return await readTarEntry(archive, path.split("/").pop()!);
+  } catch {
+    return null;
+  } finally {
+    await c.remove({ force: true }).catch(() => undefined);
+  }
+}
+
+/** The environment image's id, build time and toolchain list (cached per image id). */
+export async function imageInfo(image: string): Promise<ImageInfo> {
+  let inspect;
+  try {
+    inspect = await docker.getImage(image).inspect();
+  } catch {
+    return { name: image, missing: true };
+  }
+  if (!toolchainsCache.has(inspect.Id)) {
+    toolchainsCache.set(inspect.Id, parseToolchains(await readImageFile(image, TOOLCHAINS_FILE)));
+  }
+  return { name: image, id: inspect.Id, created: inspect.Created, toolchains: toolchainsCache.get(inspect.Id) ?? null };
+}
+
+export async function imageId(image: string): Promise<string | undefined> {
+  return docker.getImage(image).inspect().then((i) => i.Id).catch(() => undefined);
 }

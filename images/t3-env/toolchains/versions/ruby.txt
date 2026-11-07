@@ -1,0 +1,4 @@
+# Ruby versions (supported releases, precompiled). The first line is the default.
+3.4
+3.3
+4.0

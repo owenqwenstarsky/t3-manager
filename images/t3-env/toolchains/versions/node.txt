@@ -1,0 +1,4 @@
+# Node.js majors (supported releases). The first line is the default.
+24
+22
+26

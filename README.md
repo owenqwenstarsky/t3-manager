@@ -84,7 +84,12 @@ docker compose up -d --build
 
 This builds three images: the proxy, the dashboard, and `t3-env:latest`, which
 every environment runs. The `t3-env-image` service only exists to build that
-image, so it exits right away. Once the stack is up, the dashboard is at
+image, so it exits right away.
+
+`t3-env` ships every common toolchain (see [Inside an environment](#inside-an-environment)),
+so it is big: about 10–13 GB, and 30–60 minutes for the first build. Docker
+stores it once on the host, not once per environment. Set `TOOLCHAINS=minimal`
+in `.env` for one version of each language instead. Once the stack is up, the dashboard is at
 `https://t3-manager.<your-tailnet>.ts.net` and `http://<host>:8080`.
 
 ## 4. Use it
@@ -127,7 +132,8 @@ doesn't invent one; add a rule to include them.
 
 | Task | How |
 | --- | --- |
-| Update everything | `git pull && docker compose up -d --build` (existing environments keep running on their old image until recreated; their files live in volumes) |
+| Update everything | `git pull && docker compose up -d --build`, then **Update** on the Environments page to move environments onto the new image (home files, paired devices and the tailnet address stay; if the new image fails to start, the environment is put back on the old one) |
+| Change the preinstalled tools | Edit the lists in `images/t3-env/toolchains/` and rebuild. See [`docs/toolchains.md`](docs/toolchains.md) |
 | Pin versions | `T3_VERSION`, `CLAUDE_CODE_VERSION`, `CODEX_VERSION` in `.env` |
 | Update the proxy from upstream | see [`services/proxy/T3_PATCHES.md`](services/proxy/T3_PATCHES.md) |
 | Environment files | Docker volumes `t3env-<name>-home` (`/home/dev`) and `t3env-<name>-ts` (tailnet identity). **Delete → Also delete its files** removes them. |
@@ -136,6 +142,33 @@ doesn't invent one; add a rule to include them.
 
 ### Inside an environment
 
+Every environment has these preinstalled. **Settings → Environment tools** lists the exact versions in your image:
+
+| | Preinstalled (default first) | With |
+| --- | --- | --- |
+| Node.js | 24, 22, 26 | npm, pnpm, yarn 1, bun, deno, tsx, typescript, prettier, eslint |
+| Python | 3.14, 3.11, 3.12, 3.13, 3.15 (each also as `python3.X`) | pip, uv, pipx, poetry, pdm, hatch, ruff, black, pre-commit |
+| Java (Temurin) | 21, 8, 11, 17, 25 | Maven, Gradle 9 and 8, Kotlin |
+| Go | 1.27, 1.26 | gopls, golangci-lint, staticcheck, dlv, air |
+| Rust | stable, beta, nightly (wasm and musl targets) | clippy, rustfmt, rust-analyzer, cargo-nextest, cargo-watch, cargo-edit, sccache, wasm-pack, trunk |
+| Ruby | 3.4, 3.3, 4.0 | gem, bundler |
+| PHP | 8.4, 8.3, 8.5 | composer, common extensions |
+| C / C++ | gcc 14, clang 23 and 22 | cmake, ninja, meson, ccache, mold, gdb, lldb, valgrind |
+
+Also git, gh, glab, tea, lazygit, ripgrep, fd, fzf, jq, yq, tmux, protoc, buf,
+shellcheck, the psql/mariadb/redis/mongosh/sqlite3 clients and headless
+Chromium. There is **no Docker** inside environments.
+
+- Versions follow the repo: `.nvmrc`, `.python-version`, `.ruby-version`,
+  `.java-version`, `.tool-versions`, `mise.toml`, `rust-toolchain.toml`.
+  `mise use node@22` pins one for a repo.
+- Any other version installs on first use, e.g. `mise use node@18`. So do
+  other tools, e.g. `mise use -g kubectl`. These installs are kept in the home
+  volume, so they survive updates.
+- Claude Code and Codex get the same list (in `~/.claude/CLAUDE.md` and
+  `~/.codex/AGENTS.md`, between `t3-manager tools` markers), so they use what's
+  there instead of installing toolchains. T3, Claude Code and Codex run on
+  their own Node, so changing the project's Node version can't break them.
 - People work as `dev` and have passwordless `sudo`, for `apt install` and the like.
 - Projects go in `/home/dev/workspace` (persistent).
 - T3's in-app browser needs `sudo t3 browser setup` once in the T3 terminal.
@@ -180,7 +213,7 @@ doesn't invent one; add a rule to include them.
 | --- | --- |
 | `apps/dashboard` | Dashboard: Hono + dockerode server, React + Recharts UI |
 | `services/proxy` | CLIProxyAPI subtree + `t3ext` (usage analytics, key labels, Codex device login) |
-| `images/t3-env` | The per-environment image |
+| `images/t3-env` | The per-environment image; `toolchains/` lists what it installs |
 | `deploy` | Compose file and `.env.example` |
 | `docs/architecture.md` | How the pieces fit and why |
 

@@ -7,7 +7,7 @@ import { z } from "zod";
 import { cancelSignIn, signInStatus, startSignIn, submitCallback } from "./accounts.js";
 import { checkPassword, clearSession, isAuthenticated, issueSession, requireAuth } from "./auth.js";
 import { config } from "./config.js";
-import { docker, imageExists } from "./docker.js";
+import { docker, imageExists, imageInfo } from "./docker.js";
 import { envs, HttpError } from "./envs.js";
 import { normalizeGitHost, validateGitToken, validateGitUsername } from "./git.js";
 import { DEFAULT_PRICING } from "./pricing.js";
@@ -77,6 +77,8 @@ api.get("/status", async (c) => {
   });
 });
 
+api.get("/image", async (c) => c.json(await imageInfo(settings.raw.image)));
+
 // --- environments ----------------------------------------------------------
 api.get("/envs", async (c) => c.json(await envs.list()));
 api.post("/envs", async (c) => {
@@ -91,6 +93,7 @@ api.post("/envs/:name/:action{start|stop|restart}", async (c) => {
   await envs.action(c.req.param("name"), c.req.param("action") as "start" | "stop" | "restart");
   return c.json({ ok: true });
 });
+api.post("/envs/:name/update", async (c) => c.json(await envs.update(c.req.param("name"))));
 api.delete("/envs/:name", async (c) => {
   await envs.remove(c.req.param("name"), c.req.query("purge") === "1");
   return c.json({ ok: true });

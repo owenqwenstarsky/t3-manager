@@ -1,0 +1,80 @@
+# Debian (trixie) packages installed in every environment, one per line.
+# buildpack-deps:trixie already ships gcc/g++, make, autotools, pkg-config,
+# git, curl, wget, openssh-client and the common -dev headers.
+
+# System / shell
+sudo
+tini
+locales
+ca-certificates
+gnupg
+less
+man-db
+file
+time
+bc
+procps
+psmisc
+htop
+btop
+tmux
+strace
+ltrace
+lsof
+iproute2
+iputils-ping
+dnsutils
+netcat-openbsd
+socat
+rsync
+direnv
+entr
+
+# Archives
+zip
+unzip
+p7zip-full
+zstd
+xz-utils
+
+# Search / files
+ripgrep
+fd-find
+fzf
+bat
+eza
+tree
+jq
+
+# Editors
+nano
+vim
+neovim
+
+# Git
+git-lfs
+git-delta
+
+# Build (C / C++)
+build-essential
+cmake
+ninja-build
+meson
+ccache
+mold
+gdb
+valgrind
+
+# Lint / format / misc dev tools
+shellcheck
+shfmt
+yamllint
+hyperfine
+just
+httpie
+
+# Databases: clients and embedded engines (no servers)
+sqlite3
+postgresql-client
+mariadb-client
+redis-tools

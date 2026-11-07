@@ -14,6 +14,7 @@ import {
   Smartphone,
   Square,
   Trash2,
+  ArrowUpCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { EnvPhase, EnvSummary, PairLink, PairedSession } from "../../../server/shared/types";
@@ -82,8 +83,18 @@ export function EnvironmentsPage({ onOpenUsage }: { onOpenUsage: (env: string) =
     onSettled: () => qc.invalidateQueries({ queryKey: ["envs"] }),
   });
 
+  const update = useMutation({
+    mutationFn: async (names: string[]) => {
+      // One at a time: each update stops, recreates and starts a container.
+      for (const name of names) await api(`/envs/${name}/update`, { method: "POST" });
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["envs"] }),
+  });
+  const updating = (name: string) => update.isPending && (update.variables ?? []).includes(name);
+
   const list = envs.data ?? [];
   const st = status.data;
+  const outdated = list.filter((e) => e.imageOutdated);
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -109,6 +120,20 @@ export function EnvironmentsPage({ onOpenUsage }: { onOpenUsage: (env: string) =
           New environments will each show a login link to join your tailnet. Save a reusable auth key in Settings to skip that step.
         </Notice>
       )}
+      {outdated.length > 0 && (
+        <Notice
+          tone="info"
+          title={outdated.length === 1 ? `${outdated[0].name} can be updated to the new environment image` : `${outdated.length} environments can be updated to the new environment image`}
+          action={
+            <Button size="sm" icon={<ArrowUpCircle className="size-4" />} loading={update.isPending} onClick={() => update.mutate(outdated.map((e) => e.name))}>
+              {outdated.length === 1 ? "Update" : "Update all"}
+            </Button>
+          }
+        >
+          Updating restarts the environment on the new image (new tools and versions). Files in the home folder, paired devices and the tailnet address stay.
+        </Notice>
+      )}
+      {update.error && <Notice tone="critical" title="Update failed">{(update.error as Error).message}</Notice>}
       {st && st.proxyConfigured && !st.proxy && <Notice tone="critical" title="The model proxy is not answering">Claude Code and Codex in your environments can't reach their models.</Notice>}
 
       {envs.isLoading ? (
@@ -136,6 +161,8 @@ export function EnvironmentsPage({ onOpenUsage }: { onOpenUsage: (env: string) =
               onLogs={() => setLogsFor(env)}
               onUsage={() => onOpenUsage(env.name)}
               onAction={(act) => action.mutate({ name: env.name, act })}
+              onUpdate={() => update.mutate([env.name])}
+              updating={updating(env.name)}
               onDelete={() => setDeleting(env)}
             />
           ))}
@@ -160,6 +187,8 @@ function EnvCard({
   onLogs,
   onUsage,
   onAction,
+  onUpdate,
+  updating,
   onDelete,
 }: {
   env: EnvSummary;
@@ -170,6 +199,8 @@ function EnvCard({
   onLogs: () => void;
   onUsage: () => void;
   onAction: (a: "start" | "stop" | "restart") => void;
+  onUpdate: () => void;
+  updating: boolean;
   onDelete: () => void;
 }) {
   const phase = PHASE[env.phase];
@@ -181,6 +212,7 @@ function EnvCard({
           <div className="flex items-center gap-2">
             <h3 className="font-semibold truncate">{env.name}</h3>
             <StatusBadge tone={phase.tone} label={phase.label} />
+            {env.imageOutdated && <StatusBadge tone="info" label="Update available" icon={<ArrowUpCircle className="size-3.5" style={{ color: "var(--accent)" }} />} />}
           </div>
           <div className="text-xs text-ink-3 mt-1 truncate">
             {env.owner ? `${env.owner} · ` : ""}created {ago(env.createdAt)}
@@ -201,6 +233,7 @@ function EnvCard({
               ? { label: "Restart", icon: <RotateCw className="size-4" />, onClick: () => onAction("restart") }
               : { label: "Start", icon: <Play className="size-4" />, onClick: () => onAction("start") },
             running ? { label: "Stop", icon: <Square className="size-4" />, onClick: () => onAction("stop") } : null,
+            env.imageOutdated ? { label: "Update to the new image", icon: <ArrowUpCircle className="size-4" />, onClick: onUpdate } : null,
             { label: "Delete…", icon: <Trash2 className="size-4" />, onClick: onDelete, danger: true },
           ]}
         />
@@ -245,6 +278,11 @@ function EnvCard({
         {!running && (
           <Button icon={<Play className="size-4" />} loading={busy} onClick={() => onAction("start")}>
             Start
+          </Button>
+        )}
+        {env.imageOutdated && (
+          <Button icon={<ArrowUpCircle className="size-4" />} loading={updating} onClick={onUpdate} title="Restart on the new environment image. Home files and paired devices stay.">
+            Update
           </Button>
         )}
       </div>

@@ -105,6 +105,22 @@ why on stderr, and git shows that in the clone error.
 Using system scope leaves `~/.gitconfig` to the person. The author shows on
 each environment card ("commits as …").
 
+## Environment image and toolchains (`images/t3-env`)
+
+The image is `buildpack-deps:trixie` plus every supported version of Node,
+Python, Java, Go, Ruby, PHP, Rust and Clang, with their package managers.
+Versions are managed by mise (system installs) and rustup. The lists of what
+gets installed are plain files in `toolchains/`, so changing them doesn't
+touch the Dockerfile. See [toolchains.md](toolchains.md).
+
+The build ends by writing `/usr/local/share/t3m/toolchains.json`. The
+dashboard reads it from the image through a created-but-never-started
+container and the archive API, caches it per image id, and shows it in
+**Settings → Environment tools**. Each environment summary compares the
+container's image id with the current image's, which drives **Update
+available**. `envs.update` swaps the container and keeps the volumes, and it
+rolls back if the new container fails to start.
+
 ## Proxy fork policy
 
 `services/proxy` is a squashed `git subtree` of upstream. Changes are new

@@ -1,0 +1,11 @@
+# Python CLIs installed with `uv tool install` (isolated venvs, default Python)
+# into /opt/t3m/bin.
+poetry
+pdm
+hatch
+pipx
+virtualenv
+ruff
+black
+pre-commit
+ipython

@@ -1,0 +1,11 @@
+# System mise config for every environment (/etc/mise/config.toml).
+# Language versions live in /etc/mise/conf.d/, written at build time from
+# toolchains/versions/*.txt. A repo's mise.toml / .tool-versions / .nvmrc /
+# .python-version / ... or `mise use -g` overrides these defaults.
+[settings]
+# Honour the version files other managers use.
+idiomatic_version_file_enable_tools = ["node", "python", "ruby", "java", "go"]
+# Agents run non-interactively: don't stop at trust prompts for repo configs.
+trusted_config_paths = ["/home"]
+# A command for a version that isn't installed yet installs it first.
+not_found_auto_install = true

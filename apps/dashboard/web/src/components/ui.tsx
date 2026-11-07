@@ -66,10 +66,10 @@ const toneIcon: Record<Tone, ReactNode> = {
 };
 
 /** Status badge: icon + label, never color alone. */
-export function StatusBadge({ tone, label }: { tone: Tone; label: string }) {
+export function StatusBadge({ tone, label, icon }: { tone: Tone; label: string; icon?: ReactNode }) {
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-2 px-2 py-0.5 text-xs font-medium text-ink-2">
-      {toneIcon[tone]}
+      {icon ?? toneIcon[tone]}
       {label}
     </span>
   );

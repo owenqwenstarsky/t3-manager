@@ -5,7 +5,8 @@
 # 2. Joins the tailnet with /etc/t3m/ts_authkey if present (deleted once joined),
 #    otherwise waits for an interactive login whose URL the dashboard shows.
 # 3. Publishes T3 over Tailscale Serve HTTPS once logged in.
-# 4. Points Claude Code and Codex at the model proxy.
+# 4. Points Claude Code and Codex at the model proxy and tells them which tools
+#    are installed (/usr/local/share/t3m/TOOLS.md).
 # 5. Runs `t3 serve` as the dev user on loopback.
 set -euo pipefail
 
@@ -80,13 +81,18 @@ if [ -n "${PROXY_URL:-}" ] && [ -n "$PROXY_KEY" ]; then
 else
   log "no proxy configured; Claude Code and Codex need their own login"
 fi
+setpriv --reuid=dev --regid=dev --init-groups env HOME="$DEV_HOME" \
+  /usr/local/lib/t3m/agent-guidance.sh || log "couldn't write the tools list for the agents"
 
 # --- T3 Code -----------------------------------------------------------------
 log "starting T3 Code on 127.0.0.1:${T3_PORT}"
 cd "$DEV_HOME/workspace"
+# PATH comes from the image: dev's own installs, then mise shims (Node,
+# Python, Java, Go, Ruby, ...), rustup, then the system. T3, claude and codex
+# are wrappers in /usr/local/bin that run on their own pinned Node.
 exec setpriv --reuid=dev --regid=dev --init-groups env \
   HOME="$DEV_HOME" USER=dev LOGNAME=dev SHELL=/bin/bash \
-  PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+  PATH="$PATH" \
   T3CODE_HOME="$T3CODE_HOME" T3CODE_NO_BROWSER=1 \
   T3PROXY_API_KEY="$PROXY_KEY" \
   t3 serve --host 127.0.0.1 --port "$T3_PORT" --no-browser

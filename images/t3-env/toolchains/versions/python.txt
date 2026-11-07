@@ -1,0 +1,7 @@
+# Python versions (supported releases). The first line is the default `python`;
+# every version is also on PATH as python3.X (for tox, nox, uv, ...).
+3.14
+3.11
+3.12
+3.13
+3.15

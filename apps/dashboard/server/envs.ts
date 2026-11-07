@@ -7,8 +7,10 @@ import {
   createEnvContainer,
   docker,
   exec,
+  containerName,
   findEnvContainer,
   imageExists,
+  imageId,
   listEnvContainers,
   logs,
   putFiles,
@@ -111,7 +113,7 @@ async function probeTailscale(containerId: string, fresh = false): Promise<TsPro
   return probe;
 }
 
-async function summarize(c: Awaited<ReturnType<typeof listEnvContainers>>[number]): Promise<EnvSummary> {
+async function summarize(c: Awaited<ReturnType<typeof listEnvContainers>>[number], currentImageId?: string): Promise<EnvSummary> {
   const name = c.Labels[LABEL_NAME] ?? c.Names[0]?.replace(/^\//, "") ?? c.Id;
   const inspect = await docker.getContainer(c.Id).inspect();
   const health = inspect.State.Health?.Status;
@@ -152,20 +154,50 @@ async function summarize(c: Awaited<ReturnType<typeof listEnvContainers>>[number
       : undefined,
     agentsConfigured: !!record?.proxyKey,
     image: c.Image,
+    imageOutdated: !!currentImageId && inspect.Image !== currentImageId,
   };
+}
+
+/** Creates an environment container, writes its secrets and git setup, and starts it. */
+async function startEnvContainer(input: {
+  name: string;
+  image: string;
+  hostname: string;
+  owner?: string;
+  proxyKey?: string;
+  tsAuthKey?: string;
+  start?: boolean;
+}) {
+  const container = await createEnvContainer({
+    name: input.name,
+    image: input.image,
+    hostname: input.hostname,
+    owner: input.owner,
+    env: {
+      TS_HOSTNAME: input.hostname,
+      ...(input.proxyKey ? { PROXY_URL: config.proxyUrlForEnvs } : {}),
+    },
+  });
+  const files = [];
+  if (input.tsAuthKey) files.push({ name: "ts_authkey", content: input.tsAuthKey });
+  if (input.proxyKey) files.push({ name: "proxy_key", content: input.proxyKey });
+  if (files.length) await putFiles(container.id, "/etc/t3m", files);
+  await writeGitFiles(container.id, { env: input.name, owner: input.owner, hostname: input.hostname });
+  if (input.start !== false) await container.start();
+  return container;
 }
 
 export const envs = {
   async list(): Promise<EnvSummary[]> {
-    const containers = await listEnvContainers();
-    const out = await Promise.all(containers.map((c) => summarize(c).catch(() => null)));
+    const [containers, current] = await Promise.all([listEnvContainers(), imageId(settings.raw.image)]);
+    const out = await Promise.all(containers.map((c) => summarize(c, current).catch(() => null)));
     return sortEnvs(out.filter((e): e is EnvSummary => e !== null));
   },
 
   async get(name: string): Promise<EnvSummary> {
     const c = await findEnvContainer(name);
     if (!c) throw new HttpError(404, `No environment named ${name}`);
-    return summarize(c);
+    return summarize(c, await imageId(settings.raw.image));
   },
 
   async create(input: { name: string; owner?: string; tsAuthKey?: string; image?: string }): Promise<EnvSummary> {
@@ -188,29 +220,54 @@ export const envs = {
     }
 
     try {
-      const container = await createEnvContainer({
-        name,
-        image,
-        hostname,
-        owner: input.owner?.trim() || undefined,
-        env: {
-          TS_HOSTNAME: hostname,
-          ...(proxyKey ? { PROXY_URL: config.proxyUrlForEnvs } : {}),
-        },
-      });
-      const files = [];
-      if (tsAuthKey) files.push({ name: "ts_authkey", content: tsAuthKey });
-      if (proxyKey) files.push({ name: "proxy_key", content: proxyKey });
-      if (files.length) await putFiles(container.id, "/etc/t3m", files);
-      await writeGitFiles(container.id, { env: name, owner: input.owner?.trim() || undefined, hostname });
+      await startEnvContainer({ name, image, hostname, owner: input.owner?.trim() || undefined, proxyKey, tsAuthKey });
       settings.setEnv(name, { proxyKey, owner: input.owner?.trim() || undefined, createdAt: Date.now() });
-      await container.start();
     } catch (e) {
       if (proxyKey) await proxy.removeKey(proxyKey).catch(() => undefined);
       await removeEnvContainer(name, false).catch(() => undefined);
       throw e;
     }
     return this.get(name);
+  },
+
+  /**
+   * Moves an environment onto the current image: a new container with the
+   * same name, volumes, keys and git setup. The old one is kept (renamed,
+   * stopped) until the new one has started, and put back if anything fails.
+   */
+  async update(name: string): Promise<EnvSummary> {
+    const c = await findEnvContainer(name);
+    if (!c) throw new HttpError(404, `No environment named ${name}`);
+    const image = settings.raw.image;
+    if (!(await imageExists(image))) throw new HttpError(400, `Image ${image} is not built. Run "docker compose build" on the host first.`);
+    const old = docker.getContainer(c.Id);
+    const inspect = await old.inspect();
+    const wasRunning = inspect.State.Running;
+    const record = settings.env(name);
+    const backup = `${containerName(name)}-previous`;
+    await docker.getContainer(backup).remove({ force: true }).catch(() => undefined);
+    if (wasRunning) await old.stop({ t: 15 });
+    await old.rename({ name: backup });
+    tsCache.delete(c.Id);
+    try {
+      const fresh = await startEnvContainer({
+        name,
+        image,
+        hostname: inspect.Config.Hostname,
+        owner: c.Labels[LABEL_OWNER] || record?.owner,
+        proxyKey: record?.proxyKey,
+        // Only used if the node isn't logged in yet; its tailnet state is in the kept volume.
+        tsAuthKey: settings.raw.tsAuthKey || undefined,
+        start: wasRunning,
+      });
+      await old.remove({ force: true }).catch(() => undefined);
+      return summarize((await listEnvContainers()).find((x) => x.Id === fresh.id)!, await imageId(image));
+    } catch (e) {
+      await docker.getContainer(containerName(name)).remove({ force: true }).catch(() => undefined);
+      await old.rename({ name: containerName(name) }).catch(() => undefined);
+      if (wasRunning) await old.start().catch(() => undefined);
+      throw new HttpError(500, `Could not update ${name}, so it was left on its old image: ${(e as Error).message}`);
+    }
   },
 
   /** Pushes the current git credentials and author into every environment. */

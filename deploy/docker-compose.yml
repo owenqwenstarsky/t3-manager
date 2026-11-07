@@ -44,12 +44,15 @@ services:
       - "${DASHBOARD_BIND:-0.0.0.0}:${DASHBOARD_PORT:-8080}:8080"
     networks: [t3-net]
 
-  # Builds the image every environment runs. It exits immediately; the
-  # dashboard starts real environments from the image.
+  # Builds the image every environment runs (all languages and tools; see
+  # docs/toolchains.md). It exits immediately; the dashboard starts real
+  # environments from the image. After a rebuild, update environments from
+  # the dashboard to move them onto it.
   t3-env-image:
     build:
       context: ../images/t3-env
       args:
+        TOOLCHAINS: ${TOOLCHAINS:-full}
         T3_VERSION: ${T3_VERSION:-latest}
         CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-latest}
         CODEX_VERSION: ${CODEX_VERSION:-latest}
