@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, RotateCcw, Trash2 } from "lucide-react";
+import { GitBranch, KeyRound, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { PriceRule, Settings } from "../../../server/shared/types";
-import { Button, Card, Field, Notice, SectionTitle, Spinner, inputClass, cx } from "../components/ui";
+import { defaultGitUsername, fillTemplate, normalizeGitHost } from "../../../server/git";
+import type { EnvSummary, GitSyncResult, PriceRule, Settings } from "../../../server/shared/types";
+import { Button, Card, Field, Modal, Notice, SectionTitle, Spinner, Toggle, inputClass, cx } from "../components/ui";
 import { api } from "../lib/api";
+import { ago } from "../lib/format";
 
 type SettingsResponse = Settings & { defaultPricing: PriceRule[] };
 
@@ -25,6 +27,7 @@ export function SettingsPage() {
       </div>
       {save.error && <Notice tone="critical">{(save.error as Error).message}</Notice>}
       <TailnetCard s={s} onSave={(p) => save.mutate(p)} saving={save.isPending} />
+      <GitCard s={s} />
       <PricingCard s={s} onSave={(pricing) => save.mutate({ pricing })} saving={save.isPending} />
     </div>
   );
@@ -145,5 +148,302 @@ function PricingCard({ s, onSave, saving }: { s: SettingsResponse; onSave: (p: P
         <span className="text-xs text-ink-3">OpenAI / Codex models have no default price. Add a rule (for example <span className="font-mono">gpt-*</span>) to include them in cost estimates.</span>
       </div>
     </Card>
+  );
+}
+
+type GitReply = { settings: Settings; sync: GitSyncResult };
+
+/** Shows where a git change was applied: every environment, or which ones failed. */
+function SyncNotice({ sync }: { sync: GitSyncResult }) {
+  if (sync.error) return <Notice tone="warning">{sync.error}</Notice>;
+  if (sync.failed.length)
+    return (
+      <Notice tone="warning" title={`Saved, but ${sync.failed.length} environment${sync.failed.length === 1 ? "" : "s"} weren't updated`}>
+        <ul className="mt-1 space-y-0.5 text-xs">
+          {sync.failed.map((f) => (
+            <li key={f.env}>
+              <span className="font-medium">{f.env}</span>: {f.error}
+            </li>
+          ))}
+        </ul>
+        <p className="mt-1 text-xs">They'll be updated the next time the dashboard starts, or use Apply again.</p>
+      </Notice>
+    );
+  return (
+    <p className="text-xs text-ink-3">
+      Applied to {sync.synced === 0 ? "no environments yet" : `${sync.synced} environment${sync.synced === 1 ? "" : "s"}`}. New environments get it when they're created.
+    </p>
+  );
+}
+
+function GitCard({ s }: { s: SettingsResponse }) {
+  const qc = useQueryClient();
+  const [lastSync, setLastSync] = useState<GitSyncResult | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [changing, setChanging] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const done = (r: GitReply) => {
+    qc.setQueryData<SettingsResponse>(["settings"], (old) => (old ? { ...old, ...r.settings } : old));
+    qc.invalidateQueries({ queryKey: ["envs"] });
+    setLastSync(r.sync);
+  };
+  const remove = useMutation({
+    mutationFn: (host: string) => api<GitReply>(`/git/credentials/${encodeURIComponent(host)}`, { method: "DELETE" }),
+    onSuccess: (r) => {
+      done(r);
+      setRemoving(null);
+    },
+  });
+  const sync = useMutation({ mutationFn: () => api<GitReply>("/git/sync", { method: "POST" }), onSuccess: done });
+
+  return (
+    <Card className="p-5 space-y-6">
+      <SectionTitle
+        title="Git"
+        subtitle="Pushed into every environment, existing and new: HTTPS tokens for your git servers, and a commit author that names the environment, so every commit can be traced back to where it was made."
+        action={
+          <Button size="sm" variant="ghost" loading={sync.isPending} onClick={() => sync.mutate()}>
+            Apply to all environments again
+          </Button>
+        }
+      />
+      {lastSync && <SyncNotice sync={lastSync} />}
+      {(remove.error || sync.error) && <Notice tone="critical">{((remove.error || sync.error) as Error).message}</Notice>}
+
+      <div>
+        <div className="flex items-end justify-between gap-3 mb-2">
+          <div>
+            <h3 className="text-sm font-semibold">Credentials</h3>
+            <p className="text-xs text-ink-3 mt-0.5">
+              One token per server. Tokens can't be viewed again after saving, only replaced. Git uses them only over HTTPS.
+            </p>
+          </div>
+          <Button size="sm" variant={s.gitCredentials.length ? "secondary" : "primary"} icon={<Plus className="size-4" />} onClick={() => setAdding(true)}>
+            Add server
+          </Button>
+        </div>
+        {s.gitCredentials.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-line px-4 py-5 text-center text-[13px] text-ink-3">
+            No git servers yet. Add one so <span className="font-mono text-xs">git clone</span> and <span className="font-mono text-xs">git push</span> work over HTTPS in every environment.
+          </div>
+        ) : (
+          <div className="rounded-lg border border-line divide-y divide-line">
+            {s.gitCredentials.map((g) => (
+              <div key={g.host} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-3.5 py-2.5">
+                <KeyRound className="size-4 text-ink-3 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="font-mono text-[13px] truncate">{g.host}</div>
+                  <div className="text-xs text-ink-3">
+                    Token set · updated {ago(g.updatedAt)}
+                    {g.customUsername && " · custom username"}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button size="sm" onClick={() => setChanging(g.host)}>
+                    Change token
+                  </Button>
+                  <Button size="sm" variant="ghost" aria-label={`Remove ${g.host}`} icon={<Trash2 className="size-4" />} onClick={() => setRemoving(g.host)} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="text-xs text-ink-3 mt-2">
+          Anyone with an environment can use these tokens, and can read them from inside it. Give each token only the repositories and permissions people should have.
+        </p>
+      </div>
+
+      <AuthorSection s={s} onDone={done} />
+
+      {adding && <CredentialModal mode="add" existing={s.gitCredentials.map((g) => g.host)} onClose={() => setAdding(false)} onDone={done} />}
+      {changing && <CredentialModal mode="change" host={changing} onClose={() => setChanging(null)} onDone={done} />}
+      {removing && (
+        <Modal
+          open
+          onClose={() => setRemoving(null)}
+          title={`Remove the token for ${removing}?`}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setRemoving(null)}>Cancel</Button>
+              <Button variant="danger" loading={remove.isPending} onClick={() => remove.mutate(removing)}>
+                Remove token
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm text-ink-2">Environments stop using it right away. Revoke it on {removing} too if it shouldn't work anywhere else.</p>
+        </Modal>
+      )}
+    </Card>
+  );
+}
+
+function CredentialModal(
+  props: { onClose: () => void; onDone: (r: GitReply) => void } & ({ mode: "add"; existing: string[] } | { mode: "change"; host: string }),
+) {
+  const [hostInput, setHostInput] = useState("");
+  const [token, setToken] = useState("");
+  const [username, setUsername] = useState("");
+  const [showUser, setShowUser] = useState(false);
+  const parsed = props.mode === "add" && hostInput.trim() ? normalizeGitHost(hostInput) : null;
+  const host = props.mode === "change" ? props.host : parsed && "host" in parsed ? parsed.host : "";
+  const duplicate = props.mode === "add" && !!host && props.existing.includes(host);
+  const save = useMutation({
+    mutationFn: () =>
+      props.mode === "add"
+        ? api<GitReply>("/git/credentials", { body: { host: hostInput, token, username: username.trim() || undefined } })
+        : api<GitReply>(`/git/credentials/${encodeURIComponent(props.host)}`, {
+            method: "PUT",
+            body: { token, ...(showUser ? { username: username.trim() } : {}) },
+          }),
+    onSuccess: (r) => {
+      props.onDone(r);
+      props.onClose();
+    },
+  });
+  const canSave = !!token.trim() && !!host && !duplicate && !save.isPending;
+  return (
+    <Modal
+      open
+      onClose={props.onClose}
+      title={props.mode === "add" ? "Add a git server" : `Change the token for ${props.host}`}
+      subtitle={props.mode === "add" ? "Every environment can then clone and push over HTTPS without signing in." : "The old token stops being used in every environment right away."}
+      footer={
+        <>
+          <Button variant="ghost" onClick={props.onClose}>Cancel</Button>
+          <Button variant="primary" disabled={!canSave} loading={save.isPending} onClick={() => save.mutate()}>
+            {props.mode === "add" ? "Save" : "Replace token"}
+          </Button>
+        </>
+      }
+    >
+      <form
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (canSave) save.mutate();
+        }}
+      >
+        {props.mode === "add" && (
+          <Field
+            label="Server address"
+            hint={
+              parsed && "error" in parsed ? (
+                <span className="text-critical-ink">{parsed.error}</span>
+              ) : duplicate ? (
+                <span className="text-critical-ink">{host} already has a token. Change it from the list instead.</span>
+              ) : host ? (
+                <>Saved as <span className="font-mono">{host}</span>. Applies to every repository on this server.</>
+              ) : (
+                "For example github.com, gitlab.com or git.example.com:8443. Pasting a repository URL works too."
+              )
+            }
+          >
+            <input className={cx(inputClass, "font-mono text-xs")} autoFocus value={hostInput} onChange={(e) => setHostInput(e.target.value)} placeholder="github.com" />
+          </Field>
+        )}
+        <Field label={props.mode === "add" ? "Token" : "New token"} hint={host ? tokenHint(host) : undefined}>
+          <input
+            className={cx(inputClass, "font-mono text-xs")}
+            type="password"
+            autoComplete="off"
+            autoFocus={props.mode === "change"}
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="Paste the token"
+          />
+        </Field>
+        {showUser ? (
+          <Field
+            label="Username"
+            hint={
+              props.mode === "change"
+                ? `Leave empty to use the default (${defaultGitUsername(host)}).`
+                : `Only needed if your server checks it. Empty uses ${host ? defaultGitUsername(host) : "the default for the server"}.`
+            }
+          >
+            <input className={cx(inputClass, "font-mono text-xs")} value={username} onChange={(e) => setUsername(e.target.value)} placeholder={host ? defaultGitUsername(host) : ""} />
+          </Field>
+        ) : (
+          <button type="button" className="text-xs text-ink-3 hover:text-ink" onClick={() => setShowUser(true)}>
+            {props.mode === "change" ? "Change the username too" : "Set a username (only some servers need one)"}
+          </button>
+        )}
+        {save.error && <Notice tone="critical">{(save.error as Error).message}</Notice>}
+        <button type="submit" className="hidden" />
+      </form>
+    </Modal>
+  );
+}
+
+function tokenHint(host: string): string {
+  const h = host.replace(/:\d+$/, "");
+  if (h === "github.com") return "A fine-grained personal access token with Contents read and write on the repositories people need.";
+  if (h === "gitlab.com" || h.startsWith("gitlab.")) return "A personal, project or group access token with read_repository and write_repository.";
+  if (h === "bitbucket.org") return "A repository, project or workspace access token.";
+  return "A personal access token, or the password for HTTPS access.";
+}
+
+function AuthorSection({ s, onDone }: { s: SettingsResponse; onDone: (r: GitReply) => void }) {
+  const [enabled, setEnabled] = useState(s.gitAuthor.enabled);
+  const [name, setName] = useState(s.gitAuthor.name);
+  const [email, setEmail] = useState(s.gitAuthor.email);
+  useEffect(() => {
+    setEnabled(s.gitAuthor.enabled);
+    setName(s.gitAuthor.name);
+    setEmail(s.gitAuthor.email);
+  }, [s.gitAuthor]);
+  const envs = useQuery({ queryKey: ["envs"], queryFn: () => api<EnvSummary[]>("/envs"), retry: false });
+  const sample = envs.data?.[0];
+  const vars = { env: sample?.name ?? "alice", owner: sample?.owner ?? (sample ? undefined : "Alice Example"), hostname: sample?.hostname ?? `${s.hostnamePrefix}alice` };
+  const dirty = enabled !== s.gitAuthor.enabled || name !== s.gitAuthor.name || email !== s.gitAuthor.email;
+  const save = useMutation({ mutationFn: () => api<GitReply>("/git/author", { method: "PUT", body: { enabled, name, email } }), onSuccess: onDone });
+  const previewName = fillTemplate(name, vars);
+  const previewEmail = fillTemplate(email, vars).replace(/[<>\s]/g, "");
+  return (
+    <div>
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <h3 className="text-sm font-semibold">Commit author</h3>
+          <p className="text-xs text-ink-3 mt-0.5">
+            Set as the system-wide git identity in each environment. Placeholders: <span className="font-mono">{"{env}"}</span>,{" "}
+            <span className="font-mono">{"{owner}"}</span> (falls back to the environment name), <span className="font-mono">{"{hostname}"}</span>.
+          </p>
+        </div>
+        <Toggle checked={enabled} onChange={setEnabled} label="Set the commit author" />
+      </div>
+      <div className={cx("grid md:grid-cols-2 gap-4", !enabled && "opacity-50 pointer-events-none")}>
+        <Field label="Name">
+          <input className={cx(inputClass, "font-mono text-xs")} value={name} onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field label="Email" hint="t3.invalid is a reserved domain that never receives mail. Use your own domain if your git server requires a verified email.">
+          <input className={cx(inputClass, "font-mono text-xs")} value={email} onChange={(e) => setEmail(e.target.value)} />
+        </Field>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <div className="flex min-w-0 items-center gap-2 rounded-lg bg-surface-2 px-3 py-2 text-xs">
+          <GitBranch className="size-3.5 text-ink-3 shrink-0" />
+          {enabled ? (
+            <span className="truncate">
+              In <span className="font-medium">{vars.env}</span>, commits are authored as{" "}
+              <span className="font-mono text-ink">
+                {previewName || "…"} &lt;{previewEmail || "…"}&gt;
+              </span>
+            </span>
+          ) : (
+            <span className="text-ink-3">Off: environments use whatever author people set themselves.</span>
+          )}
+        </div>
+        <Button size="sm" variant="primary" disabled={!dirty || (enabled && (!name.trim() || !email.trim()))} loading={save.isPending} onClick={() => save.mutate()}>
+          Save author
+        </Button>
+        {dirty && (
+          <Button size="sm" variant="ghost" onClick={() => { setName("{env} (T3)"); setEmail("{env}@t3.invalid"); }}>
+            Defaults
+          </Button>
+        )}
+      </div>
+      {save.error && <div className="mt-2"><Notice tone="critical">{(save.error as Error).message}</Notice></div>}
+    </div>
   );
 }

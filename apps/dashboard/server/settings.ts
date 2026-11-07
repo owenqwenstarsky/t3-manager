@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { config } from "./config.js";
+import { DEFAULT_GIT_AUTHOR, type GitAuthorSettings, type GitCredential } from "./git.js";
 import { DEFAULT_PRICING } from "./pricing.js";
 import type { PriceRule, Settings } from "./shared/types.js";
 
@@ -19,6 +20,9 @@ interface StoredSettings {
   pricing: PriceRule[];
   sessionSecret: string;
   envs: Record<string, EnvRecord>;
+  /** Tokens never leave the server: public() only exposes hosts. */
+  gitCredentials: GitCredential[];
+  gitAuthor: GitAuthorSettings;
 }
 
 const file = () => path.join(config.dataDir, "settings.json");
@@ -38,6 +42,8 @@ function load(): StoredSettings {
     pricing: stored.pricing ?? DEFAULT_PRICING,
     sessionSecret: stored.sessionSecret ?? randomBytes(32).toString("hex"),
     envs: stored.envs ?? {},
+    gitCredentials: stored.gitCredentials ?? [],
+    gitAuthor: { ...DEFAULT_GIT_AUTHOR, ...stored.gitAuthor },
   };
 }
 
@@ -81,6 +87,10 @@ export const settings = {
       pricing: current.pricing,
       proxyUrl: config.proxyUrl,
       authRequired: config.adminPassword !== "",
+      gitCredentials: current.gitCredentials
+        .map((g) => ({ host: g.host, customUsername: !!g.username, updatedAt: g.updatedAt }))
+        .sort((a, b) => a.host.localeCompare(b.host)),
+      gitAuthor: current.gitAuthor,
     };
   },
 };

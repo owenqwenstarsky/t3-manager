@@ -103,7 +103,15 @@ image, so it exits right away. Once the stack is up, the dashboard is at
    provider reports them). The proxy asks Anthropic/OpenAI at most every 5
    minutes per account and updates the numbers from every request in between.
    **⋯ → Check limits now** forces a fresh check.
-4. **Usage.** Pick a range (1H … 1Y, or custom), an interval, a grouping
+4. **Settings → Git** (optional).
+   - **Credentials:** add an HTTPS token for each git server (github.com,
+     gitlab.com, your own host). There's one token per server. After saving
+     you can only replace or remove it, not view it.
+   - **Commit author:** set an author template (default `{env} (T3) <{env}@t3.invalid>`)
+     so every commit shows which environment made it.
+   - **Delivery:** both are pushed into every environment, existing and new,
+     as soon as you save.
+5. **Usage.** Pick a range (1H … 1Y, or custom), an interval, a grouping
    (environment / account / model / provider) and a metric (cost / tokens /
    requests). Select a breakdown row to filter by it.
 
@@ -128,6 +136,10 @@ doesn't invent one; add a rule to include them.
 - People work as `dev` and have passwordless `sudo`, for `apt install` and the like.
 - Projects go in `/home/dev/workspace` (persistent).
 - T3's in-app browser needs `sudo t3 browser setup` once in the T3 terminal.
+- Git uses the dashboard's settings through `/etc/gitconfig` (system scope).
+  People can still override them in `~/.gitconfig` or per repository. Tokens
+  are answered only over HTTPS, and only for the exact server they were saved
+  for.
 - Claude Code reads `~/.claude/settings.json` and Codex reads `~/.codex/config.toml`.
   The entrypoint rewrites only the proxy keys in those files at each start.
 
@@ -143,6 +155,9 @@ doesn't invent one; add a rule to include them.
   `DASHBOARD_BIND=127.0.0.1`.
 - Auth keys are handed to containers as files, deleted after joining, and never
   set as environment variables.
+- Git tokens are shared by every environment, and anyone with an environment
+  can read them (they have `sudo`). Use tokens limited to the repositories and
+  permissions people should have.
 - Environments share the model accounts. Anyone with an environment can spend
   from them; the Usage page shows who did.
 

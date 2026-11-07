@@ -9,11 +9,12 @@ import { checkPassword, clearSession, isAuthenticated, issueSession, requireAuth
 import { config } from "./config.js";
 import { docker, imageExists } from "./docker.js";
 import { envs, HttpError } from "./envs.js";
+import { normalizeGitHost, validateGitToken, validateGitUsername } from "./git.js";
 import { DEFAULT_PRICING } from "./pricing.js";
 import { proxy, ProxyError } from "./proxy.js";
 import { settings } from "./settings.js";
 import { DIMS, events, summary, timeseries, windows, type UsageQuery } from "./usage.js";
-import type { UsageDim } from "./shared/types.js";
+import type { GitSyncResult, UsageDim } from "./shared/types.js";
 
 const app = new Hono();
 
@@ -209,6 +210,74 @@ api.put("/settings", async (c) => {
   return c.json(settings.public());
 });
 
+// --- git (credentials + commit author pushed into every environment) --------
+async function syncGit(): Promise<GitSyncResult> {
+  try {
+    return await envs.syncGit();
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    const why = err.code === "ENOENT" || err.code === "ECONNREFUSED" ? "Docker isn't reachable" : err.message;
+    return { synced: 0, failed: [], error: `Saved, but environments weren't updated: ${why}. They'll be updated when the dashboard next starts with Docker available.` };
+  }
+}
+const gitReply = async (c: Context) => c.json({ settings: settings.public(), sync: await syncGit() });
+function checkOrThrow(err: string | null): void {
+  if (err) throw new HttpError(400, err);
+}
+
+api.post("/git/credentials", async (c) => {
+  const input = await body(c, z.object({ host: z.string(), token: z.string(), username: z.string().optional() }));
+  const parsed = normalizeGitHost(input.host);
+  if ("error" in parsed) throw new HttpError(400, parsed.error);
+  const token = input.token.trim();
+  const username = input.username?.trim() ?? "";
+  checkOrThrow(validateGitToken(token));
+  checkOrThrow(validateGitUsername(username));
+  if (settings.raw.gitCredentials.some((g) => g.host === parsed.host)) {
+    throw new HttpError(409, `${parsed.host} already has a token. Change it instead.`);
+  }
+  settings.update({
+    gitCredentials: [...settings.raw.gitCredentials, { host: parsed.host, token, username: username || undefined, updatedAt: Date.now() }],
+  });
+  return gitReply(c);
+});
+api.put("/git/credentials/:host", async (c) => {
+  const host = c.req.param("host").toLowerCase();
+  // username: omitted keeps the current one, "" goes back to the default for the host.
+  const input = await body(c, z.object({ token: z.string(), username: z.string().optional() }));
+  const existing = settings.raw.gitCredentials.find((g) => g.host === host);
+  if (!existing) throw new HttpError(404, `No token is set for ${host}`);
+  const token = input.token.trim();
+  checkOrThrow(validateGitToken(token));
+  const username = input.username === undefined ? existing.username : input.username.trim() || undefined;
+  checkOrThrow(validateGitUsername(username ?? ""));
+  settings.update({
+    gitCredentials: settings.raw.gitCredentials.map((g) => (g.host === host ? { host, token, username, updatedAt: Date.now() } : g)),
+  });
+  return gitReply(c);
+});
+api.delete("/git/credentials/:host", async (c) => {
+  const host = c.req.param("host").toLowerCase();
+  if (!settings.raw.gitCredentials.some((g) => g.host === host)) throw new HttpError(404, `No token is set for ${host}`);
+  settings.update({ gitCredentials: settings.raw.gitCredentials.filter((g) => g.host !== host) });
+  return gitReply(c);
+});
+const authorTemplate = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .refine((v) => !/[\u0000-\u001f\u007f]/.test(v), "No line breaks");
+api.put("/git/author", async (c) => {
+  const input = await body(
+    c,
+    z.object({ enabled: z.boolean(), name: authorTemplate, email: authorTemplate.refine((v) => !/[<>\s]/.test(v), "No spaces or angle brackets") }),
+  );
+  settings.update({ gitAuthor: input });
+  return gitReply(c);
+});
+api.post("/git/sync", gitReply);
+
 app.route("/api", api);
 
 // --- web UI ----------------------------------------------------------------
@@ -223,4 +292,11 @@ serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => 
   console.log(`T3 Manager dashboard on http://${info.address}:${info.port}`);
   if (!config.adminPassword) console.warn("ADMIN_PASSWORD is not set: the dashboard is open to anyone who can reach it.");
   if (!config.proxyManagementKey) console.warn("PROXY_MANAGEMENT_PASSWORD is not set: model proxy features are disabled.");
+  // Bring every environment's git setup in line with the saved settings.
+  envs
+    .syncGit()
+    .then((r) => {
+      if (r.failed.length) console.warn(`git settings not applied to: ${r.failed.map((f) => `${f.env} (${f.error})`).join(", ")}`);
+    })
+    .catch(() => undefined);
 });

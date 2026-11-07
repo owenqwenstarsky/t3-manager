@@ -64,17 +64,31 @@ export async function exec(
 }
 
 /** Writes files into a container (works before it starts). */
-export async function putFiles(
-  containerId: string,
-  dir: string,
-  files: { name: string; content: string; mode?: number }[],
-): Promise<void> {
+export interface TarFile {
+  name: string;
+  content?: string;
+  mode?: number;
+  uid?: number;
+  gid?: number;
+  dir?: boolean;
+}
+
+export async function putFiles(containerId: string, dir: string, files: TarFile[]): Promise<void> {
+  await docker.getContainer(containerId).putArchive(await packFiles(files), { path: dir });
+}
+
+/** Builds a tar archive; files default to root-owned 0600. */
+export async function packFiles(files: TarFile[]): Promise<Buffer> {
   const pack = tar.pack();
-  for (const f of files) pack.entry({ name: f.name, mode: f.mode ?? 0o600, uid: 0, gid: 0 }, f.content);
+  for (const f of files) {
+    const owner = { uid: f.uid ?? 0, gid: f.gid ?? 0 };
+    if (f.dir) pack.entry({ name: f.name, type: "directory", mode: f.mode ?? 0o755, ...owner });
+    else pack.entry({ name: f.name, mode: f.mode ?? 0o600, ...owner }, f.content ?? "");
+  }
   pack.finalize();
   const chunks: Buffer[] = [];
   for await (const c of pack) chunks.push(c as Buffer);
-  await docker.getContainer(containerId).putArchive(Buffer.concat(chunks), { path: dir });
+  return Buffer.concat(chunks);
 }
 
 /** Last lines of container logs as text. */

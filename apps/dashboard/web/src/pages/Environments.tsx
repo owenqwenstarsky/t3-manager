@@ -185,6 +185,11 @@ function EnvCard({
           <div className="text-xs text-ink-3 mt-1 truncate">
             {env.owner ? `${env.owner} · ` : ""}created {ago(env.createdAt)}
           </div>
+          {env.gitAuthor && (
+            <div className="text-xs text-ink-3 mt-0.5 truncate" title={`git commits in this environment are authored as ${env.gitAuthor}`}>
+              commits as <span className="font-mono text-[11px] text-ink-2">{env.gitAuthor}</span>
+            </div>
+          )}
         </div>
         <Menu
           trigger={<Button size="sm" variant="ghost" aria-label="More actions" icon={<MoreHorizontal className="size-4" />} />}

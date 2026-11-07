@@ -11,6 +11,8 @@ export type EnvPhase =
   | "error";
 
 export interface EnvSummary {
+  /** Commit author git uses in this environment, e.g. "alice (T3) <alice@t3.invalid>". */
+  gitAuthor?: string;
   name: string;
   containerId: string;
   phase: EnvPhase;
@@ -207,4 +209,15 @@ export interface Settings {
   pricing: PriceRule[];
   proxyUrl: string;
   authRequired: boolean;
+  /** Configured git servers. Tokens and usernames are never sent to the browser. */
+  gitCredentials: { host: string; customUsername: boolean; updatedAt: number }[];
+  gitAuthor: { enabled: boolean; name: string; email: string };
+}
+
+/** Result of pushing git settings into environment containers. */
+export interface GitSyncResult {
+  synced: number;
+  failed: { env: string; error: string }[];
+  /** Docker itself was unreachable. */
+  error?: string;
 }

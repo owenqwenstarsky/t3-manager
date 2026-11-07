@@ -24,9 +24,18 @@ import {
   validateEnvName,
   type TailscaleInfo,
 } from "./logic.js";
+import { gitAuthorFor, gitTarFiles, type GitVars } from "./git.js";
 import { proxy } from "./proxy.js";
 import { settings } from "./settings.js";
-import type { EnvSummary, PairLink, PairedSession } from "./shared/types.js";
+import type { EnvSummary, GitSyncResult, PairLink, PairedSession } from "./shared/types.js";
+
+/**
+ * Writes the managed git files into a container (running or stopped). The
+ * token file is readable by root and the dev group only.
+ */
+async function writeGitFiles(containerId: string, vars: GitVars): Promise<void> {
+  await putFiles(containerId, "/", gitTarFiles(settings.raw, vars));
+}
 
 const TS = ["tailscale", "--socket=/var/run/tailscale/tailscaled.sock"];
 const T3_ENV = ["T3CODE_HOME=/home/dev/.t3", "HOME=/home/dev"];
@@ -83,9 +92,15 @@ async function summarize(c: Awaited<ReturnType<typeof listEnvContainers>>[number
   const { phase, detail } = derivePhase({ dockerState: c.State, health, tailscale: ts?.info, serveFailed });
   const record = settings.env(name);
   const dns = ts?.info?.dnsName;
+  const author = gitAuthorFor(settings.raw.gitAuthor, {
+    env: name,
+    owner: c.Labels[LABEL_OWNER] || record?.owner,
+    hostname: inspect.Config.Hostname,
+  });
   return {
     name,
     containerId: c.Id,
+    gitAuthor: author ? `${author.name} <${author.email}>` : undefined,
     phase,
     phaseDetail: detail,
     dockerState: c.State,
@@ -155,6 +170,7 @@ export const envs = {
       if (tsAuthKey) files.push({ name: "ts_authkey", content: tsAuthKey });
       if (proxyKey) files.push({ name: "proxy_key", content: proxyKey });
       if (files.length) await putFiles(container.id, "/etc/t3m", files);
+      await writeGitFiles(container.id, { env: name, owner: input.owner?.trim() || undefined, hostname });
       settings.setEnv(name, { proxyKey, owner: input.owner?.trim() || undefined, createdAt: Date.now() });
       await container.start();
     } catch (e) {
@@ -163,6 +179,30 @@ export const envs = {
       throw e;
     }
     return this.get(name);
+  },
+
+  /** Pushes the current git credentials and author into every environment. */
+  async syncGit(): Promise<GitSyncResult> {
+    const result: GitSyncResult = { synced: 0, failed: [] };
+    const list = await listEnvContainers();
+    await Promise.all(
+      list.map(async (c) => {
+        const env = c.Labels[LABEL_NAME] ?? c.Names[0]?.replace(/^\//, "") ?? c.Id;
+        try {
+          const inspect = await docker.getContainer(c.Id).inspect();
+          await writeGitFiles(c.Id, {
+            env,
+            owner: c.Labels[LABEL_OWNER] || settings.env(env)?.owner,
+            hostname: inspect.Config.Hostname,
+          });
+          result.synced++;
+        } catch (e) {
+          result.failed.push({ env, error: (e as Error).message });
+        }
+      }),
+    );
+    result.failed.sort((a, b) => a.env.localeCompare(b.env));
+    return result;
   },
 
   async action(name: string, action: "start" | "stop" | "restart"): Promise<void> {

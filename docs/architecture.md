@@ -81,6 +81,23 @@ the provider's own numbers, so `t3ext` reads them from the provider:
 - **After a reset.** If a window's reset time has passed since the last
   reading, the dashboard shows it as full again.
 
+## Git setup (`apps/dashboard/server/git.ts`)
+
+The dashboard keeps git tokens (one per `host[:port]`) and an author template
+in its settings file. The API only ever returns hosts. On every change, on
+environment creation and on dashboard start, it writes three files into each
+environment container through the Docker archive API. That works whether the
+container is running or stopped:
+
+| File | Owner, mode | Purpose |
+| --- | --- | --- |
+| `/etc/gitconfig` | root, 0644 | System-scope `user.name`/`user.email` from the template, and `credential.helper` |
+| `/etc/t3m-git/credential-helper` | root, 0755 | Answers git's `get` with the token for an exact host over HTTPS. Ignores `store`/`erase`, so a failed push can't delete it |
+| `/etc/t3m-git/credentials` | root:dev, 0640 | `host<TAB>username<TAB>token` |
+
+Using system scope leaves `~/.gitconfig` to the person. The author shows on
+each environment card ("commits as …").
+
 ## Proxy fork policy
 
 `services/proxy` is a squashed `git subtree` of upstream. Changes are new
