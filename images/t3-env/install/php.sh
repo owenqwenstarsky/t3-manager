@@ -14,8 +14,9 @@ apt-get update
 pkgs=()
 for v in $(pick_words "$PHP_VERSIONS"); do
   for ext in $PHP_EXTENSIONS; do
-    # Some extensions are built in for newer versions (e.g. opcache in 8.5).
-    if apt-cache show "php$v-$ext" >/dev/null 2>&1; then pkgs+=("php$v-$ext"); fi
+    # Some extensions are built in for newer versions (e.g. opcache in 8.5),
+    # where the package is missing or only virtual: install real candidates only.
+    if apt-cache policy "php$v-$ext" 2>/dev/null | grep -q 'Candidate: [^(]'; then pkgs+=("php$v-$ext"); fi
   done
 done
 apt-get install -y --no-install-recommends "${pkgs[@]}"

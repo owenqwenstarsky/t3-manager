@@ -235,6 +235,7 @@ export function parseToolchains(text: string | null): ImageToolchains | null {
       languages: j.languages
         .filter((l) => l && typeof l.name === "string" && Array.isArray(l.versions))
         .map((l) => ({ name: l.name, tools: String(l.tools ?? ""), default: String(l.default ?? l.versions[0] ?? ""), versions: l.versions.map(String) })),
+      missing: Array.isArray(j.missing) ? j.missing.filter((m): m is string => typeof m === "string" && m !== "") : [],
     };
   } catch {
     return null;

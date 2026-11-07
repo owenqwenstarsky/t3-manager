@@ -64,8 +64,11 @@ cc=("gcc $(gcc -dumpfullversion)")
 while read -r c; do cc+=("${c/-/ }"); done < <(find /usr/bin -maxdepth 1 -regex '.*/clang-[0-9]+' -printf '%f\n' | sort -rV)
 add_lang "C / C++" "cmake, ninja, meson, make, ccache, mold, gdb, lldb, valgrind, clang-format, clang-tidy" "${cc[@]}"
 
+missing=()
+if [ -s "$MISSING_FILE" ]; then mapfile -t missing < <(sort -u "$MISSING_FILE"); fi
 jq -s --arg built "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg flavor "$TOOLCHAINS" \
-  '{built: $built, toolchains: $flavor, languages: .}' "$langs" >"$out/toolchains.json"
+  --argjson missing "$(jq -nc '$ARGS.positional' --args "${missing[@]}")" \
+  '{built: $built, toolchains: $flavor, languages: ., missing: $missing}' "$langs" >"$out/toolchains.json"
 rm "$langs"
 
 {
@@ -93,5 +96,8 @@ MD
 ## Other CLIs
 git, git-lfs, gh, glab, tea, lazygit, delta, jq, yq, rg, fd, fzf, bat, eza, tree, httpie, curl, wget, tmux, direnv, watchexec, entr, hyperfine, just, task, protoc, buf, shellcheck, shfmt, hadolint, actionlint, taplo, yamllint, prettier, eslint, sqlite3, psql, mariadb, redis-cli, mongosh, chromium (Playwright, headless), neovim, vim, nano.
 MD
+  if [ ${#missing[@]} -gt 0 ]; then
+    printf '\n## Failed to install at build time\n%s. Install them yourself if you need them.\n' "$(printf '%s, ' "${missing[@]}" | sed 's/, $//')"
+  fi
 } >"$out/TOOLS.md"
 cat "$out/TOOLS.md"

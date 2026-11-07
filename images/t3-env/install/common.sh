@@ -33,3 +33,26 @@ apt_install() {
 # Toolchain directories belong to dev so `npm i -g`, `gem install`,
 # `pip install`, `rustup component add` work like on a personal machine.
 give_to_dev() { chown -R "$DEV_UID:$DEV_GID" "$@"; }
+
+# Tools that failed to install are recorded here (and listed for the agents and
+# the dashboard) instead of failing a long build. Languages don't use this.
+MISSING_FILE=/usr/local/share/t3m/missing-tools.txt
+
+record_missing() {
+  mkdir -p "$(dirname "$MISSING_FILE")"
+  echo "$1" >>"$MISSING_FILE"
+  echo "!!! could not install $1; continuing (recorded in $MISSING_FILE)" >&2
+}
+
+# try_install <label> <command...>: runs the command, retries once, and on a
+# second failure records the label. Never fails the build.
+try_install() {
+  local label=$1
+  shift
+  "$@" && return 0
+  log "retrying $label in 10s"
+  sleep 10
+  "$@" && return 0
+  record_missing "$label"
+  return 0
+}

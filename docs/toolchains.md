@@ -13,13 +13,15 @@ Everything is data in [`images/t3-env/toolchains/`](../images/t3-env/toolchains)
 | `mise/config.toml` | mise settings: which version files are honoured, trust, auto-install. |
 | `rust.conf` | rustup toolchains (first is default), components, extra targets. |
 | `php.conf` | PHP versions (packages.sury.org; first is `php`) and extensions. |
-| `llvm.conf` | Clang/LLVM versions (apt.llvm.org; first is `clang`). |
+| `llvm.conf` | Clang/LLVM versions (apt.llvm.org). The first is `clang` and also gets lldb, libc++ and libc++abi; the others get clang, lld, clangd, clang-format and clang-tidy as `clang-N` and so on (libc++ dev packages can't be installed for two versions at once). |
 | `apt-packages.txt` | Debian packages: CLIs, database clients, C/C++ build tools. |
 | `cargo-tools.txt`, `go-tools.txt`, `uv-tools.txt` | CLIs built or installed with cargo-binstall, `go install` and `uv tool install`. |
 
 To add a version, add a line, rebuild (`docker compose build t3-env-image` in `deploy/`), then press **Update** on the Environments page. Each language has its own image layer, so changing one list rebuilds only that layer and the ones after it.
 
 `TOOLCHAINS=minimal` (in `.env`, or as a build arg) installs only the first line of every list. It uses the same scripts, so CI builds it to keep the Dockerfile tested. The full image is roughly 10–13 GB.
+
+Languages are strict: if one fails to install, the build stops. The extra CLIs (`mise/tools.toml`, cargo, go and uv tools, LLVM versions after the first) are best-effort instead. Each one gets a retry; if it still fails, it is recorded in `/usr/local/share/t3m/missing-tools.txt` and commented out of the mise config, and the build carries on. The list then appears in TOOLS.md for the agents and as a warning in **Settings → Environment tools**. Rebuilding usually fixes it.
 
 The build calls GitHub's release API through mise and cargo-binstall. If a build hits GitHub's anonymous rate limit, pass a token as a build secret:
 

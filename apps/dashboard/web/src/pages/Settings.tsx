@@ -143,6 +143,15 @@ function ImageCard({ image }: { image: string }) {
               </div>
             ))}
           </div>
+          {tc.missing.length > 0 && (
+            <div className="mt-4">
+              <Notice tone="warning" title="Some tools failed to install when this image was built">
+                <span className="font-mono text-xs">{tc.missing.join(", ")}</span>. Rebuilding the image usually fixes it, since
+                these are often a network or rate-limit hiccup. Until then, each is one <code className="font-mono text-xs">mise use -g …</code>{" "}
+                away inside an environment.
+              </Notice>
+            </div>
+          )}
           <p className="text-xs text-ink-3 mt-4">
             Also: git, gh, glab, tea, jq, yq, ripgrep, fd, fzf, tmux, protoc, buf, shellcheck, database clients (psql, mariadb, redis-cli,
             mongosh, sqlite3) and headless Chromium. Docker is not available inside environments.

@@ -8,6 +8,7 @@ const sample = {
     { name: "Node.js", tools: "npm, pnpm", default: "24.22.2", versions: ["24.22.2", "26.13.0", "22.23.4"] },
     { name: "Rust", tools: "cargo", default: "stable 1.99.1", versions: ["stable 1.99.1", "nightly 1.101.0-nightly"] },
   ],
+  missing: ["pnpm"],
 };
 
 describe("readTarEntry", () => {
@@ -47,5 +48,10 @@ describe("parseToolchains", () => {
   it("drops malformed languages and fills in a missing default", () => {
     const t = parseToolchains(JSON.stringify({ built: "x", toolchains: "minimal", languages: [{ name: "Go", versions: ["1.27.3"] }, { versions: [] }, null] }));
     expect(t?.languages).toEqual([{ name: "Go", tools: "", default: "1.27.3", versions: ["1.27.3"] }]);
+  });
+
+  it("treats a missing or malformed missing-tools list as empty", () => {
+    expect(parseToolchains(JSON.stringify({ built: "x", languages: [] }))?.missing).toEqual([]);
+    expect(parseToolchains(JSON.stringify({ built: "x", languages: [], missing: ["tsx", 3, ""] }))?.missing).toEqual(["tsx"]);
   });
 });

@@ -42,6 +42,8 @@ export interface ImageToolchains {
   built: string;
   toolchains: string;
   languages: { name: string; tools: string; default: string; versions: string[] }[];
+  /** Tools that failed to install when the image was built. */
+  missing: string[];
 }
 
 export interface ImageInfo {
