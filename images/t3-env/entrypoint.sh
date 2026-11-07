@@ -2,7 +2,7 @@
 # T3 environment entrypoint (runs as root under tini).
 #
 # 1. Starts tailscaled in userspace mode (no /dev/net/tun or NET_ADMIN needed).
-# 2. Joins the tailnet with /etc/t3m/ts_authkey if present (deleted afterwards),
+# 2. Joins the tailnet with /etc/t3m/ts_authkey if present (deleted once joined),
 #    otherwise waits for an interactive login whose URL the dashboard shows.
 # 3. Publishes T3 over Tailscale Serve HTTPS once logged in.
 # 4. Points Claude Code and Codex at the model proxy.
@@ -31,7 +31,8 @@ for _ in $(seq 1 50); do
 done
 
 backend_state() {
-  tailscale --socket="$TS_SOCKET" status --json 2>/dev/null | jq -r '.BackendState // "Unknown"'
+  # Never fail: this runs in command substitutions under `set -e`.
+  tailscale --socket="$TS_SOCKET" status --json 2>/dev/null | jq -r '.BackendState // "Unknown"' 2>/dev/null || echo Unknown
 }
 
 up_args=(--socket="$TS_SOCKET" up --hostname="$TS_HOSTNAME" --accept-dns=false)
@@ -52,15 +53,15 @@ if [ "$state" != "Running" ]; then
     tailscale "${up_args[@]}" >/var/log/tailscale-up.log 2>&1 &
   fi
 fi
-# The key is only needed once; node state persists in /var/lib/tailscale.
-rm -f /etc/t3m/ts_authkey
-
 # Publish T3 over HTTPS as soon as the node is running.
 (
   for _ in $(seq 1 1800); do
     if [ "$(backend_state)" = "Running" ]; then
+      # The key is only needed to join; node state persists in /var/lib/tailscale.
+      # Kept until the join succeeds so a transient failure can retry on restart.
+      rm -f /etc/t3m/ts_authkey
       if tailscale --socket="$TS_SOCKET" serve --bg --https=443 "http://127.0.0.1:${T3_PORT}" >/var/log/tailscale-serve.log 2>&1; then
-        log "serving https://$(tailscale --socket="$TS_SOCKET" status --json | jq -r '.Self.DNSName' | sed 's/\.$//')/"
+        log "serving https://$(tailscale --socket="$TS_SOCKET" status --json 2>/dev/null | jq -r '.Self.DNSName' | sed 's/\.$//' || true)/"
       else
         log "tailscale serve failed (is HTTPS enabled for the tailnet?): $(tail -n 3 /var/log/tailscale-serve.log)"
       fi

@@ -1,1 +1,179 @@
 # T3 Manager
+
+Self-hosted control panel for handing out [T3 Code](https://github.com/pingdotgg/t3code)
+environments over Tailscale.
+
+- **Environments.** Each person gets a T3 Code server in its own Docker container.
+  It joins your tailnet on its own (`t3-alice.your-tailnet.ts.net`) and is
+  published over Tailscale HTTPS. A **Get pair link** button gives you a QR code
+  and links for the T3 mobile app, app.t3.codes and the desktop app.
+- **One model proxy for everyone.** Claude Code and Codex in every environment
+  are preconfigured to use a bundled fork of
+  [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI). You add Claude and
+  ChatGPT subscription accounts once in the dashboard, and nobody signs in inside
+  their environment.
+- **Usage analytics.** Every request is recorded with:
+  - environment, account and model
+  - tokens: input, cache read, cache write, output, reasoning
+  - latency and time to first token
+  - status
+
+  The dashboard charts this over any time range, with estimated cost,
+  breakdowns, comparison with the previous period, a request log and CSV export.
+
+```
+Proxmox CT (Docker)
+├── dashboard   tailnet node "t3-manager" ─ HTTPS ─ you
+│   └─ drives Docker, the proxy's management API, and each environment
+├── proxy       internal only (t3-net), pools Claude / ChatGPT accounts, records usage
+└── t3-env-<name> × N
+    ├─ tailscaled (userspace) → node "t3-<name>", Tailscale Serve :443 → T3 Code
+    ├─ t3 serve (user dev, loopback)
+    └─ Claude Code + Codex → http://proxy:8317 with a per-environment key
+```
+
+## 1. One-time tailnet setup
+
+In the [Tailscale admin console](https://login.tailscale.com/admin):
+
+1. **DNS:** enable **MagicDNS** and **HTTPS Certificates**. T3's hosted app and
+   mobile pairing need HTTPS, which Tailscale Serve provides.
+2. **Access controls:** add a tag for the machines and let people reach them on
+   443. Adapt this to your policy:
+
+   ```jsonc
+   "tagOwners": { "tag:t3": ["autogroup:admin"] },
+   "grants": [
+     { "src": ["autogroup:member"], "dst": ["tag:t3"], "ip": ["tcp:443"] }
+   ]
+   ```
+
+3. **Keys:** generate an auth key that is **reusable**, **pre-approved** and
+   **tagged** `tag:t3`, and **not ephemeral** (an ephemeral node disappears when its
+   container stops). New environments then join with no manual step. Without a
+   key, each new environment card shows a Tailscale login link instead.
+
+## 2. Host (Proxmox CT)
+
+- Docker inside an LXC container needs **nesting** turned on (and `keyctl=1` for
+  an unprivileged CT).
+- Nothing Tailscale-specific is needed on the host. Every container runs
+  Tailscale in userspace mode, so no `/dev/net/tun` and no `NET_ADMIN`.
+
+## 3. Run it
+
+```bash
+git clone https://github.com/owenqwenstarsky/t3-manager.git
+```
+
+```bash
+cd t3-manager/deploy && cp .env.example .env
+```
+
+Edit `.env` and set:
+
+- `ADMIN_PASSWORD`
+- `PROXY_MANAGEMENT_PASSWORD` (`openssl rand -hex 32`)
+- `TS_AUTHKEY`
+
+Then:
+
+```bash
+docker compose up -d --build
+```
+
+This builds three images: the proxy, the dashboard, and `t3-env:latest`, which
+every environment runs. The `t3-env-image` service only exists to build that
+image, so it exits right away. Once the stack is up, the dashboard is at
+`https://t3-manager.<your-tailnet>.ts.net` and `http://<host>:8080`.
+
+## 4. Use it
+
+1. **Accounts → Add Claude account / Add ChatGPT account.**
+   - ChatGPT uses a device code: open the link, type the code, done.
+   - Claude opens its sign-in page. Afterwards, paste the `localhost` address
+     your browser lands on into the box. It submits on paste.
+2. **Environments → New environment.** Enter a name (and optionally who it's
+   for). The card moves through *Starting → Joining tailnet → Ready*.
+3. **Get pair link.** The person scans the QR code with the T3 Code app, or opens
+   the link. Each link works once and expires (15 minutes by default). Revoke
+   devices under **⋯ → Paired devices**.
+4. **Usage.** Pick a range (1H … 1Y, or custom), an interval, a grouping
+   (environment / account / model / provider) and a metric (cost / tokens /
+   requests). Select a breakdown row to filter by it.
+
+Cost is an **estimate at API list prices** (edit them in **Settings →
+Pricing**). Subscription accounts aren't billed per token, so read it as
+API-equivalent value. OpenAI/Codex models ship without a price, so the dashboard
+doesn't invent one; add a rule to include them.
+
+## Operations
+
+| Task | How |
+| --- | --- |
+| Update everything | `git pull && docker compose up -d --build` (existing environments keep running on their old image until recreated; their files live in volumes) |
+| Pin versions | `T3_VERSION`, `CLAUDE_CODE_VERSION`, `CODEX_VERSION` in `.env` |
+| Update the proxy from upstream | see [`services/proxy/T3_PATCHES.md`](services/proxy/T3_PATCHES.md) |
+| Environment files | Docker volumes `t3env-<name>-home` (`/home/dev`) and `t3env-<name>-ts` (tailnet identity). **Delete → Also delete its files** removes them. |
+| Usage retention | `USAGE_EVENT_RETENTION_DAYS` (request log, default 45), `USAGE_HOURLY_RETENTION_DAYS` (charts, default 800) |
+| Back up | volumes `t3-manager_proxy-data` (accounts, usage, keys) and `t3-manager_dashboard-data` (settings) |
+
+### Inside an environment
+
+- People work as `dev` and have passwordless `sudo`, for `apt install` and the like.
+- Projects go in `/home/dev/workspace` (persistent).
+- T3's in-app browser needs `sudo t3 browser setup` once in the T3 terminal.
+- Claude Code reads `~/.claude/settings.json` and Codex reads `~/.codex/config.toml`.
+  The entrypoint rewrites only the proxy keys in those files at each start.
+
+## Security notes
+
+- Each environment has its own proxy key. Deleting the environment revokes it.
+  The proxy treats an empty key list as "no auth", so it always keeps a reserved
+  key and the dashboard never removes the last one.
+- The proxy publishes no ports. Its management API is reachable only on the
+  internal `t3-net` network and requires `PROXY_MANAGEMENT_PASSWORD`.
+- The dashboard controls Docker through its socket, which amounts to root on the
+  host. Keep it behind `ADMIN_PASSWORD` and your tailnet, or set
+  `DASHBOARD_BIND=127.0.0.1`.
+- Auth keys are handed to containers as files, deleted after joining, and never
+  set as environment variables.
+- Environments share the model accounts. Anyone with an environment can spend
+  from them; the Usage page shows who did.
+
+## Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| Card says **HTTPS not available** | Enable HTTPS Certificates for the tailnet (step 1), then **Restart** the environment |
+| Card says **Needs tailnet login** | Click **Log in to Tailscale**, or save an auth key in Settings for next time |
+| Claude Code / Codex say they can't reach the model | **Accounts** needs at least one active account for that provider. Check **Usage → Recent requests → Failed** |
+| **Image t3-env:latest is not built** | `docker compose up -d --build` in `deploy/` |
+
+## Repository layout
+
+| Path | What |
+| --- | --- |
+| `apps/dashboard` | Dashboard: Hono + dockerode server, React + Recharts UI |
+| `services/proxy` | CLIProxyAPI subtree + `t3ext` (usage analytics, key labels, Codex device login) |
+| `images/t3-env` | The per-environment image |
+| `deploy` | Compose file and `.env.example` |
+| `docs/architecture.md` | How the pieces fit and why |
+
+## Development
+
+```bash
+pnpm install
+```
+
+```bash
+pnpm --filter @t3m/dashboard test
+```
+
+```bash
+cd services/proxy && go test ./t3ext/ && go build ./cmd/server
+```
+
+To run the dashboard against a local proxy, set `PROXY_URL=http://127.0.0.1:8317`,
+`PROXY_MANAGEMENT_PASSWORD`, `ADMIN_PASSWORD` and `DATA_DIR`, then start
+`pnpm --filter @t3m/dashboard dev`. The UI is on :5173 and the API on :8080.

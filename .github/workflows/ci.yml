@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @t3m/dashboard typecheck
+      - run: pnpm --filter @t3m/dashboard test
+      - run: pnpm --filter @t3m/dashboard build
+
+  proxy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/proxy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/proxy/go.mod
+          cache-dependency-path: services/proxy/go.sum
+      - run: test -z "$(gofmt -l t3ext cmd/server sdk/auth/t3_codex_device.go)"
+      - run: go vet ./t3ext/ ./sdk/auth/ ./cmd/server/
+      - run: go test ./t3ext/ ./sdk/auth/
+      - run: CGO_ENABLED=0 go build -o /dev/null ./cmd/server
+
+  images:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: proxy
+            context: services/proxy
+            file: services/proxy/Dockerfile.t3
+          - name: dashboard
+            context: .
+            file: apps/dashboard/Dockerfile
+          - name: t3-env
+            context: images/t3-env
+            file: images/t3-env/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          shellcheck images/t3-env/entrypoint.sh images/t3-env/lib/configure-agents.sh \
+            apps/dashboard/docker-entrypoint.sh services/proxy/t3ext/docker-entrypoint.sh

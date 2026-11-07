@@ -55,6 +55,7 @@ envfile="$HOME/.config/t3m/env"
 printf 'export T3PROXY_API_KEY=%q\n' "$PROXY_KEY" > "$envfile"
 chmod 600 "$envfile" "$settings"
 if ! grep -q '.config/t3m/env' "$HOME/.bashrc" 2>/dev/null; then
+  # shellcheck disable=SC2016 # $HOME must stay literal in .bashrc
   printf '\n[ -f "$HOME/.config/t3m/env" ] && . "$HOME/.config/t3m/env"\n' >> "$HOME/.bashrc"
 fi
 echo "t3-env: agents configured for ${PROXY_URL}"

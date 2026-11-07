@@ -1,0 +1,68 @@
+# T3 Manager stack. Run from this directory:
+#   cp .env.example .env   # then fill it in
+#   docker compose up -d --build
+name: t3-manager
+
+services:
+  proxy:
+    build:
+      context: ../services/proxy
+      dockerfile: Dockerfile.t3
+    image: t3m-proxy:latest
+    restart: unless-stopped
+    environment:
+      MANAGEMENT_PASSWORD: ${PROXY_MANAGEMENT_PASSWORD:?set PROXY_MANAGEMENT_PASSWORD in .env}
+      T3EXT_EVENT_RETENTION_DAYS: ${USAGE_EVENT_RETENTION_DAYS:-45}
+      T3EXT_HOURLY_RETENTION_DAYS: ${USAGE_HOURLY_RETENTION_DAYS:-800}
+    volumes:
+      - proxy-data:/data
+    networks: [t3-net]
+    # No published ports: only the dashboard and environments reach it.
+
+  dashboard:
+    build:
+      context: ..
+      dockerfile: apps/dashboard/Dockerfile
+    image: t3m-dashboard:latest
+    restart: unless-stopped
+    depends_on: [proxy]
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      PROXY_URL: http://proxy:8317
+      PROXY_MANAGEMENT_PASSWORD: ${PROXY_MANAGEMENT_PASSWORD}
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      DASHBOARD_TAILSCALE: ${DASHBOARD_TAILSCALE:-true}
+      DASHBOARD_HOSTNAME: ${DASHBOARD_HOSTNAME:-t3-manager}
+      ENV_HOSTNAME_PREFIX: ${ENV_HOSTNAME_PREFIX:-t3-}
+      T3_IMAGE: t3-env:latest
+      DOCKER_NETWORK: t3-net
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - dashboard-data:/data
+      - dashboard-tailscale:/var/lib/tailscale
+    ports:
+      - "${DASHBOARD_BIND:-0.0.0.0}:${DASHBOARD_PORT:-8080}:8080"
+    networks: [t3-net]
+
+  # Builds the image every environment runs. It exits immediately; the
+  # dashboard starts real environments from the image.
+  t3-env-image:
+    build:
+      context: ../images/t3-env
+      args:
+        T3_VERSION: ${T3_VERSION:-latest}
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-latest}
+        CODEX_VERSION: ${CODEX_VERSION:-latest}
+    image: t3-env:latest
+    entrypoint: ["/bin/true"]
+    restart: "no"
+    network_mode: none
+
+networks:
+  t3-net:
+    name: t3-net
+
+volumes:
+  proxy-data:
+  dashboard-data:
+  dashboard-tailscale:
