@@ -119,6 +119,11 @@ in `.env` for one version of each language instead. Once the stack is up, the da
      so every commit shows which environment made it.
    - **Delivery:** both are pushed into every environment, existing and new,
      as soon as you save.
+   **Settings → Gitea CLI** (optional): add your Gitea servers (instance URL
+   and an access token; Gitea 28 or newer). `gt` is then logged in to them in
+   every environment, with one of them as the default. Each save logs in
+   again inside the running environments and shows any server gt couldn't log
+   in to. Logins people add themselves with `gt auth login` are kept.
 5. **Usage.** Pick a range (1H … 1Y, or custom), an interval, a grouping
    (environment / account / model / provider) and a metric (cost / tokens /
    requests). Select a breakdown row to filter by it.
@@ -155,7 +160,7 @@ Every environment has these preinstalled. **Settings → Environment tools** lis
 | PHP | 8.4, 8.3, 8.5 | composer, common extensions |
 | C / C++ | gcc 14, clang 23 and 22 | cmake, ninja, meson, ccache, mold, gdb, lldb, valgrind |
 
-Also git, gh, glab, tea, lazygit, ripgrep, fd, fzf, jq, yq, tmux, protoc, buf,
+Also git, gh, glab, gt (Gitea CLI), lazygit, ripgrep, fd, fzf, jq, yq, tmux, protoc, buf,
 shellcheck, the psql/mariadb/redis/mongosh/sqlite3 clients and headless
 Chromium. There is **no Docker** inside environments.
 

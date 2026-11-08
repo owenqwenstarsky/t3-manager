@@ -29,7 +29,7 @@ echo "== T3 and agents"
 for c in t3 claude codex; do check "$c" "$c" --version; done
 
 echo "== CLIs"
-for c in git git-lfs gh glab tea lazygit delta jq yq rg fd fzf bat eza tree http tmux direnv \
+for c in git git-lfs gh glab gt lazygit delta jq yq rg fd fzf bat eza tree http tmux direnv \
   watchexec entr hyperfine just task protoc buf shellcheck shfmt hadolint actionlint taplo \
   yamllint prettier eslint tsc tsx sqlite3 psql mariadb redis-cli mongosh nvim cmake ninja \
   meson ccache mold gdb lldb valgrind clang clangd clang-format clang-tidy gcc make composer \

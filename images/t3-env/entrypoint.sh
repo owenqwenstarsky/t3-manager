@@ -84,6 +84,22 @@ fi
 setpriv --reuid=dev --regid=dev --init-groups env HOME="$DEV_HOME" \
   /usr/local/lib/t3m/agent-guidance.sh || log "couldn't write the tools list for the agents"
 
+# --- Gitea CLI ---------------------------------------------------------------
+# The dashboard writes the Gitea servers and a login script (Settings > Gitea
+# CLI); log gt in to them. Retried a few times in case the network is slow to
+# come up. Output, without tokens, goes to /var/log/t3m-gitea.log.
+if [ -r /etc/t3m-gitea/sync ]; then
+  (
+    for attempt in 1 2 3; do
+      out="$(setpriv --reuid=dev --regid=dev --init-groups env HOME="$DEV_HOME" sh /etc/t3m-gitea/sync 2>&1)"
+      printf '%s attempt %s\n%s\n' "$(date -Is)" "$attempt" "$out" >>/var/log/t3m-gitea.log
+      printf '%s\n' "$out" | grep -q '^fail ' || exit 0
+      sleep 20
+    done
+    log "gt couldn't log in to every Gitea server; see /var/log/t3m-gitea.log"
+  ) &
+fi
+
 # --- T3 Code -----------------------------------------------------------------
 log "starting T3 Code on 127.0.0.1:${T3_PORT}"
 cd "$DEV_HOME/workspace"

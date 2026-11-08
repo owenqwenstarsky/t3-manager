@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GitBranch, KeyRound, Package, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { GitBranch, KeyRound, Package, Plus, RotateCcw, SquareTerminal, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { defaultGitUsername, fillTemplate, normalizeGitHost } from "../../../server/git";
-import type { EnvSummary, GitSyncResult, ImageInfo, PriceRule, Settings } from "../../../server/shared/types";
+import { normalizeGiteaUrl } from "../../../server/gitea";
+import type { EnvSummary, GiteaSyncResult, GitSyncResult, ImageInfo, PriceRule, Settings } from "../../../server/shared/types";
 import { Button, Card, Field, Modal, Notice, SectionTitle, Spinner, Toggle, inputClass, cx } from "../components/ui";
 import { api } from "../lib/api";
 import { ago } from "../lib/format";
@@ -29,6 +30,7 @@ export function SettingsPage() {
       <TailnetCard s={s} onSave={(p) => save.mutate(p)} saving={save.isPending} />
       <ImageCard image={s.image} />
       <GitCard s={s} />
+      <GiteaCard s={s} />
       <PricingCard s={s} onSave={(pricing) => save.mutate({ pricing })} saving={save.isPending} />
     </div>
   );
@@ -153,7 +155,7 @@ function ImageCard({ image }: { image: string }) {
             </div>
           )}
           <p className="text-xs text-ink-3 mt-4">
-            Also: git, gh, glab, tea, jq, yq, ripgrep, fd, fzf, tmux, protoc, buf, shellcheck, database clients (psql, mariadb, redis-cli,
+            Also: git, gh, glab, gt (Gitea CLI), jq, yq, ripgrep, fd, fzf, tmux, protoc, buf, shellcheck, database clients (psql, mariadb, redis-cli,
             mongosh, sqlite3) and headless Chromium. Docker is not available inside environments.
           </p>
         </>
@@ -235,6 +237,22 @@ function PricingCard({ s, onSave, saving }: { s: SettingsResponse; onSave: (p: P
 
 type GitReply = { settings: Settings; sync: GitSyncResult };
 
+/** Environments a settings change couldn't be written to. */
+function FailedEnvsNotice({ failed }: { failed: { env: string; error: string }[] }) {
+  if (!failed.length) return null;
+  return (
+    <Notice tone="warning" title={`${failed.length} environment${failed.length === 1 ? "" : "s"} weren't updated`}>
+      <ul className="mt-1 space-y-0.5 text-xs">
+        {failed.map((f) => (
+          <li key={f.env}>
+            <span className="font-medium">{f.env}</span>: {f.error}
+          </li>
+        ))}
+      </ul>
+    </Notice>
+  );
+}
+
 /** Shows where a git change was applied and whether git in each environment gets its tokens. */
 function SyncNotice({ sync }: { sync: GitSyncResult }) {
   if (sync.error) return <Notice tone="warning">{sync.error}</Notice>;
@@ -244,17 +262,7 @@ function SyncNotice({ sync }: { sync: GitSyncResult }) {
   const hosts = [...new Set(sync.checks.map((c) => c.host))];
   return (
     <div className="space-y-2">
-      {sync.failed.length > 0 && (
-        <Notice tone="warning" title={`${sync.failed.length} environment${sync.failed.length === 1 ? "" : "s"} weren't updated`}>
-          <ul className="mt-1 space-y-0.5 text-xs">
-            {sync.failed.map((f) => (
-              <li key={f.env}>
-                <span className="font-medium">{f.env}</span>: {f.error}
-              </li>
-            ))}
-          </ul>
-        </Notice>
-      )}
+      <FailedEnvsNotice failed={sync.failed} />
       {bad.length > 0 && (
         <Notice tone="critical" title="git couldn't get a token in some environments">
           <ul className="mt-1 space-y-2 text-xs">
@@ -511,6 +519,287 @@ function CredentialModal(
             </p>
           )}
         </div>
+        {save.error && <Notice tone="critical">{(save.error as Error).message}</Notice>}
+        <button type="submit" className="hidden" />
+      </form>
+    </Modal>
+  );
+}
+
+type GiteaReply = { settings: Settings; sync: GiteaSyncResult };
+
+/** Shows where a Gitea CLI change was applied and whether gt could log in in each environment. */
+function GiteaSyncNotice({ sync }: { sync: GiteaSyncResult }) {
+  if (sync.error) return <Notice tone="warning">{sync.error}</Notice>;
+  const bad = sync.checks.filter((c) => !c.ok);
+  const okEnvs = new Set(sync.checks.filter((c) => c.ok).map((c) => c.env));
+  for (const c of bad) okEnvs.delete(c.env);
+  const urls = [...new Set(sync.checks.map((c) => c.url))];
+  return (
+    <div className="space-y-2">
+      <FailedEnvsNotice failed={sync.failed} />
+      {bad.length > 0 && (
+        <Notice tone="critical" title="gt couldn't log in in some environments">
+          <ul className="mt-1 space-y-2 text-xs">
+            {bad.map((c) => (
+              <li key={`${c.env}/${c.url}`}>
+                <div>
+                  <span className="font-medium">{c.env}</span> → <span className="font-mono">{c.url}</span>
+                </div>
+                {c.detail && <div className="mt-0.5 font-mono text-[11px] text-ink-3 break-all">{c.detail}</div>}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs">Check the token and that the server runs Gitea 28 or newer and can be reached from the environments. Any earlier login for that server is kept.</p>
+        </Notice>
+      )}
+      {sync.skipped.length > 0 && (
+        <Notice tone="warning" title="gt wasn't set up in some environments">
+          <ul className="mt-1 space-y-0.5 text-xs">
+            {sync.skipped.map((k) => (
+              <li key={k.env}>
+                <span className="font-medium">{k.env}</span>: {k.reason}
+              </li>
+            ))}
+          </ul>
+        </Notice>
+      )}
+      {sync.warnings.length > 0 && (
+        <Notice tone="warning">
+          <ul className="space-y-0.5 text-xs">
+            {sync.warnings.map((w, i) => (
+              <li key={i}>
+                <span className="font-medium">{w.env}</span>: {w.message}
+              </li>
+            ))}
+          </ul>
+        </Notice>
+      )}
+      <p className="text-xs text-ink-3">
+        Written to {sync.synced} environment{sync.synced === 1 ? "" : "s"}.
+        {urls.length > 0 && okEnvs.size > 0 && (
+          <>
+            {" "}
+            gt is logged in to {urls.join(", ")} in {okEnvs.size}.
+          </>
+        )}
+        {sync.unchecked.length > 0 && <> Stopped, so gt logs in when they next start: {sync.unchecked.join(", ")}.</>}
+        {sync.synced === 0 && " New environments get it when they're created."}
+      </p>
+    </div>
+  );
+}
+
+function GiteaCard({ s }: { s: SettingsResponse }) {
+  const qc = useQueryClient();
+  const [lastSync, setLastSync] = useState<GiteaSyncResult | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [changing, setChanging] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const done = (r: GiteaReply) => {
+    qc.setQueryData<SettingsResponse>(["settings"], (old) => (old ? { ...old, ...r.settings } : old));
+    setLastSync(r.sync);
+  };
+  const remove = useMutation({
+    mutationFn: (url: string) => api<GiteaReply>(`/gitea/servers?url=${encodeURIComponent(url)}`, { method: "DELETE" }),
+    onSuccess: (r) => {
+      done(r);
+      setRemoving(null);
+    },
+  });
+  const makeDefault = useMutation({
+    mutationFn: (url: string) => api<GiteaReply>("/gitea/servers", { method: "PUT", body: { url, isDefault: true } }),
+    onSuccess: done,
+  });
+  const sync = useMutation({ mutationFn: () => api<GiteaReply>("/gitea/sync", { method: "POST" }), onSuccess: done });
+  const error = remove.error || makeDefault.error || sync.error;
+
+  return (
+    <Card className="p-5 space-y-6">
+      <SectionTitle
+        title="Gitea CLI"
+        subtitle={
+          <>
+            Logs <span className="font-mono">gt</span>, Gitea's official CLI, in to these servers in every environment, existing and new. Needs Gitea 28 or newer. Logins
+            people add themselves with <span className="font-mono">gt auth login</span> are kept.
+          </>
+        }
+        action={
+          <Button size="sm" variant="ghost" loading={sync.isPending} onClick={() => sync.mutate()}>
+            Apply and check
+          </Button>
+        }
+      />
+      {lastSync && <GiteaSyncNotice sync={lastSync} />}
+      {error && <Notice tone="critical">{(error as Error).message}</Notice>}
+
+      <div>
+        <div className="flex items-end justify-between gap-3 mb-2">
+          <div>
+            <h3 className="text-sm font-semibold">Servers</h3>
+            <p className="text-xs text-ink-3 mt-0.5">
+              One token per server. Tokens can't be viewed again after saving, only replaced. The default server is used when no <span className="font-mono">--host</span> or repository picks one.
+            </p>
+          </div>
+          <Button size="sm" variant={s.giteaServers.length ? "secondary" : "primary"} icon={<Plus className="size-4" />} onClick={() => setAdding(true)}>
+            Add server
+          </Button>
+        </div>
+        {s.giteaServers.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-line px-4 py-5 text-center text-[13px] text-ink-3">
+            No Gitea servers yet. Add one so <span className="font-mono text-xs">gt pr list</span>, <span className="font-mono text-xs">gt issue create</span> and the rest work in every environment.
+          </div>
+        ) : (
+          <div className="rounded-lg border border-line divide-y divide-line">
+            {s.giteaServers.map((g) => (
+              <div key={g.url} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-3.5 py-2.5">
+                <SquareTerminal className="size-4 text-ink-3 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="font-mono text-[13px] truncate">
+                    {g.url}
+                    {g.isDefault && <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 font-sans text-[11px] text-ink-2">Default</span>}
+                  </div>
+                  <div className="text-xs text-ink-3">
+                    Token set · updated {ago(g.updatedAt)}
+                    {g.url.startsWith("http://") && <span className="text-ink-2"> · plain HTTP (token sent unencrypted)</span>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  {!g.isDefault && (
+                    <Button size="sm" variant="ghost" loading={makeDefault.isPending && makeDefault.variables === g.url} onClick={() => makeDefault.mutate(g.url)}>
+                      Make default
+                    </Button>
+                  )}
+                  <Button size="sm" onClick={() => setChanging(g.url)}>
+                    Change token
+                  </Button>
+                  <Button size="sm" variant="ghost" aria-label={`Remove ${g.url}`} icon={<Trash2 className="size-4" />} onClick={() => setRemoving(g.url)} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="text-xs text-ink-3 mt-2">
+          Anyone with an environment can use these tokens, and can read them from inside it. Give each token only the scopes people should have.
+        </p>
+      </div>
+
+      {adding && <GiteaServerModal mode="add" existing={s.giteaServers.map((g) => g.url)} first={s.giteaServers.length === 0} onClose={() => setAdding(false)} onDone={done} />}
+      {changing && <GiteaServerModal mode="change" url={changing} onClose={() => setChanging(null)} onDone={done} />}
+      {removing && (
+        <Modal
+          open
+          onClose={() => setRemoving(null)}
+          title={`Remove ${removing}?`}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setRemoving(null)}>Cancel</Button>
+              <Button variant="danger" loading={remove.isPending} onClick={() => remove.mutate(removing)}>
+                Remove server
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm text-ink-2">
+            gt logs out of it in every running environment right away, and in stopped ones when they next start. Revoke the token on the server too if it shouldn't work anywhere else.
+          </p>
+        </Modal>
+      )}
+    </Card>
+  );
+}
+
+function GiteaServerModal(
+  props: { onClose: () => void; onDone: (r: GiteaReply) => void } & ({ mode: "add"; existing: string[]; first: boolean } | { mode: "change"; url: string }),
+) {
+  const [urlInput, setUrlInput] = useState("");
+  const [token, setToken] = useState("");
+  const [isDefault, setIsDefault] = useState(props.mode === "add" && props.first);
+  const parsed = props.mode === "add" && urlInput.trim() ? normalizeGiteaUrl(urlInput) : null;
+  const url = props.mode === "change" ? props.url : parsed && "url" in parsed ? parsed.url : "";
+  const duplicate = props.mode === "add" && !!url && props.existing.includes(url);
+  const save = useMutation({
+    mutationFn: () =>
+      props.mode === "add"
+        ? api<GiteaReply>("/gitea/servers", { body: { url: urlInput, token, isDefault } })
+        : api<GiteaReply>("/gitea/servers", { method: "PUT", body: { url: props.url, token } }),
+    onSuccess: (r) => {
+      props.onDone(r);
+      props.onClose();
+    },
+  });
+  const canSave = !!token.trim() && !!url && !duplicate && !save.isPending;
+  return (
+    <Modal
+      open
+      onClose={props.onClose}
+      title={props.mode === "add" ? "Add a Gitea server" : `Change the token for ${props.url}`}
+      subtitle={props.mode === "add" ? "gt is then logged in to it in every environment." : "gt logs in again with the new token in every environment."}
+      footer={
+        <>
+          <Button variant="ghost" onClick={props.onClose}>Cancel</Button>
+          <Button variant="primary" disabled={!canSave} loading={save.isPending} onClick={() => save.mutate()}>
+            {props.mode === "add" ? "Save" : "Replace token"}
+          </Button>
+        </>
+      }
+    >
+      <form
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (canSave) save.mutate();
+        }}
+      >
+        {props.mode === "add" && (
+          <Field
+            label="Server address"
+            hint={
+              parsed && "error" in parsed ? (
+                <span className="text-critical-ink">{parsed.error}</span>
+              ) : duplicate ? (
+                <span className="text-critical-ink">{url} is already set up. Change its token from the list instead.</span>
+              ) : url ? (
+                <>
+                  Saved as <span className="font-mono">{url}</span>.
+                  {url.startsWith("http://") && " Plain HTTP: the token is sent unencrypted, so only use this on a network you trust."}
+                </>
+              ) : (
+                "The address you open in a browser, like https://gitea.example.com, or http://10.0.0.5:3000 for a LAN server without HTTPS."
+              )
+            }
+          >
+            <input className={cx(inputClass, "font-mono text-xs")} autoFocus value={urlInput} onChange={(e) => setUrlInput(e.target.value)} placeholder="https://gitea.example.com" />
+          </Field>
+        )}
+        <Field
+          label={props.mode === "add" ? "Token" : "New token"}
+          hint={
+            <>
+              An access token from <span className="font-mono">{url || "your server"}/user/settings/applications</span>, with at least read access to user, plus the repository, issue and other
+              scopes people need.
+            </>
+          }
+        >
+          <input
+            className={cx(inputClass, "font-mono text-xs")}
+            type="password"
+            autoComplete="off"
+            autoFocus={props.mode === "change"}
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="Paste the token"
+          />
+        </Field>
+        {props.mode === "add" && (
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-line px-3 py-2.5">
+            <div>
+              <div className="text-[13px] font-medium">Default server</div>
+              <div className="text-xs text-ink-3 mt-0.5">Used when no --host or repository picks one.{props.first && " The first server is always the default."}</div>
+            </div>
+            <Toggle checked={isDefault || props.first} onChange={setIsDefault} label="Default server" />
+          </div>
+        )}
         {save.error && <Notice tone="critical">{(save.error as Error).message}</Notice>}
         <button type="submit" className="hidden" />
       </form>
