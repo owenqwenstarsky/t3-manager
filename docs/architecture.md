@@ -126,6 +126,22 @@ from the entrypoint when they start, retrying a few times and logging to
 `/var/log/t3m-gitea.log`. Logins people add with `gt auth login` are not in
 the managed list, so the script leaves them alone.
 
+## Agent instructions (`apps/dashboard/server/agents.ts`)
+
+**Settings → Agent instructions** holds one markdown text (up to 64 KB) for
+Claude Code and Codex. On save, on environment creation and on dashboard
+start, the dashboard writes it to `/etc/t3m-agent/instructions.md` (root,
+0644; `/etc/t3m` holds secrets and is root-only) through the archive API.
+
+`images/t3-env/lib/agent-guidance.sh` runs as `dev` on every start and copies
+the file into a managed block in `~/.claude/CLAUDE.md` and
+`~/.codex/AGENTS.md`, after the tools block, between
+`<!-- >>> t3-manager instructions … -->` and `<!-- <<< t3-manager instructions -->`.
+An empty text removes the block. Everything outside the markers is the
+person's and is kept. After a save, the dashboard also runs the script in each
+running environment, so the change applies without a restart. Environments on
+an image older than this feature are reported as needing a rebuild.
+
 ## Environment image and toolchains (`images/t3-env`)
 
 The image is `buildpack-deps:trixie` plus every supported version of Node,

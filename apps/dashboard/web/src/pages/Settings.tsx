@@ -1,12 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GitBranch, KeyRound, Package, Plus, RotateCcw, SquareTerminal, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Bot, GitBranch, KeyRound, Package, Plus, RotateCcw, SquareTerminal, Trash2 } from "lucide-react";
+import { Suspense, lazy, useEffect, useState } from "react";
+import { MAX_AGENT_INSTRUCTIONS } from "../../../server/agents";
 import { defaultGitUsername, fillTemplate, normalizeGitHost } from "../../../server/git";
 import { normalizeGiteaUrl } from "../../../server/gitea";
-import type { EnvSummary, GiteaSyncResult, GitSyncResult, ImageInfo, PriceRule, Settings } from "../../../server/shared/types";
+import type { AgentSyncResult, EnvSummary, GiteaSyncResult, GitSyncResult, ImageInfo, PriceRule, Settings } from "../../../server/shared/types";
 import { Button, Card, Field, Modal, Notice, SectionTitle, Spinner, Toggle, inputClass, cx } from "../components/ui";
 import { api } from "../lib/api";
 import { ago } from "../lib/format";
+
+// CodeMirror is large: load it only when Settings is opened.
+const MarkdownEditor = lazy(() => import("../components/MarkdownEditor").then((m) => ({ default: m.MarkdownEditor })));
 
 type SettingsResponse = Settings & { defaultPricing: PriceRule[] };
 
@@ -31,6 +35,7 @@ export function SettingsPage() {
       <ImageCard image={s.image} />
       <GitCard s={s} />
       <GiteaCard s={s} />
+      <AgentInstructionsCard s={s} />
       <PricingCard s={s} onSave={(pricing) => save.mutate({ pricing })} saving={save.isPending} />
     </div>
   );
@@ -876,5 +881,159 @@ function AuthorSection({ s, onDone }: { s: SettingsResponse; onDone: (r: GitRepl
       </div>
       {save.error && <div className="mt-2"><Notice tone="critical">{(save.error as Error).message}</Notice></div>}
     </div>
+  );
+}
+
+// --- global agent instructions ---------------------------------------------
+
+type AgentReply = { settings: Settings; sync: AgentSyncResult };
+
+const STARTER_INSTRUCTIONS = `# Team guidelines
+
+These apply in every repository on this machine. Each repository's own CLAUDE.md or AGENTS.md comes first when they disagree.
+
+## Working style
+- Read the surrounding code before changing it, and follow its conventions.
+- Keep changes small and focused on the task. Ask before large refactors.
+- Run the project's tests and linters before saying a change is done.
+
+## Git
+- Never force-push to \`main\` or shared branches.
+- Write commit messages in the imperative mood, with a short summary line.
+
+## Safety
+- Never commit secrets, tokens or \`.env\` files.
+`;
+
+const plural = (n: number, word: string) => `${n} environment${n === 1 ? "" : "s"}${word}`;
+
+/** Where saved instructions went: rewritten now, on next start, or not at all. */
+function AgentSyncNotice({ sync }: { sync: AgentSyncResult }) {
+  if (sync.error) return <Notice tone="warning">{sync.error}</Notice>;
+  return (
+    <div className="space-y-2">
+      {sync.failed.length > 0 && (
+        <Notice tone="warning" title={`${plural(sync.failed.length, "")} weren't updated`}>
+          <ul className="mt-1 space-y-0.5 text-xs">
+            {sync.failed.map((f) => (
+              <li key={f.env}>
+                <span className="font-medium">{f.env}</span>: {f.error}
+              </li>
+            ))}
+          </ul>
+        </Notice>
+      )}
+      {sync.outdated.length > 0 && (
+        <Notice tone="warning" title="Some environments run an image that can't apply these yet">
+          {sync.outdated.join(", ")}. Rebuild the image with <code className="font-mono text-xs">docker compose build t3-env-image</code>, then update
+          these environments from the Environments page.
+        </Notice>
+      )}
+      <p className="text-xs text-ink-3">
+        {sync.applied.length > 0 && <>Applied in {sync.applied.join(", ")}: agents use them from their next conversation. </>}
+        {sync.unchecked.length > 0 && <>Stopped, so they get them on their next start: {sync.unchecked.join(", ")}. </>}
+        {sync.synced === 0 && "No environments yet. New environments get them when they're created."}
+      </p>
+    </div>
+  );
+}
+
+function AgentInstructionsCard({ s }: { s: SettingsResponse }) {
+  const qc = useQueryClient();
+  const [draft, setDraft] = useState(s.agentInstructions);
+  const [lastSync, setLastSync] = useState<AgentSyncResult | null>(null);
+  useEffect(() => setDraft(s.agentInstructions), [s.agentInstructions]);
+  const dirty = draft !== s.agentInstructions;
+  const tooLong = draft.length > MAX_AGENT_INSTRUCTIONS;
+
+  // Ask before leaving the page with unsaved changes.
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+
+  const done = (r: AgentReply) => {
+    qc.setQueryData<SettingsResponse>(["settings"], (old) => (old ? { ...old, ...r.settings } : old));
+    setLastSync(r.sync);
+  };
+  const save = useMutation({
+    mutationFn: () => api<AgentReply>("/agents/instructions", { method: "PUT", body: { instructions: draft } }),
+    onSuccess: done,
+  });
+  const sync = useMutation({ mutationFn: () => api<AgentReply>("/agents/sync", { method: "POST" }), onSuccess: done });
+  const error = save.error || sync.error;
+
+  return (
+    <Card className="p-5">
+      <SectionTitle
+        title="Agent instructions"
+        subtitle={
+          <>
+            Global instructions for Claude Code and Codex in every environment, existing and new. They're kept in a managed section of{" "}
+            <code className="font-mono text-xs">~/.claude/CLAUDE.md</code> and <code className="font-mono text-xs">~/.codex/AGENTS.md</code>. Notes people
+            add to those files themselves are kept.
+          </>
+        }
+        action={
+          <Button size="sm" variant="ghost" loading={sync.isPending} disabled={dirty} title={dirty ? "Save your changes first" : undefined} onClick={() => sync.mutate()}>
+            Apply to environments
+          </Button>
+        }
+      />
+      <Suspense
+        fallback={
+          <div className="grid h-[505px] place-items-center rounded-xl border border-line">
+            <Spinner />
+          </div>
+        }
+      >
+        <MarkdownEditor
+          label="Agent instructions"
+          value={draft}
+          onChange={setDraft}
+          maxLength={MAX_AGENT_INSTRUCTIONS}
+          placeholder={"# Guidelines\n\nWrite instructions every agent should follow, in markdown…"}
+        />
+      </Suspense>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <Button size="sm" variant="primary" icon={<Bot className="size-4" />} disabled={!dirty || tooLong} loading={save.isPending} onClick={() => save.mutate()}>
+          Save instructions
+        </Button>
+        {dirty && (
+          <Button size="sm" variant="ghost" onClick={() => setDraft(s.agentInstructions)}>
+            Discard changes
+          </Button>
+        )}
+        {!draft.trim() && (
+          <Button size="sm" variant="ghost" onClick={() => setDraft(STARTER_INSTRUCTIONS)}>
+            Start from an example
+          </Button>
+        )}
+        <span className="text-xs text-ink-3">
+          {dirty
+            ? "Unsaved changes."
+            : s.agentInstructions.trim()
+              ? "Both agents load these into every conversation, so keep them short."
+              : "No global instructions yet. Saving an empty text removes the section."}
+        </span>
+      </div>
+      {tooLong && (
+        <div className="mt-3">
+          <Notice tone="critical">That's over the {MAX_AGENT_INSTRUCTIONS / 1024} KB limit. Shorten it to save.</Notice>
+        </div>
+      )}
+      {error && (
+        <div className="mt-3">
+          <Notice tone="critical">{(error as Error).message}</Notice>
+        </div>
+      )}
+      {lastSync && (
+        <div className="mt-3">
+          <AgentSyncNotice sync={lastSync} />
+        </div>
+      )}
+    </Card>
   );
 }

@@ -26,6 +26,8 @@ interface StoredSettings {
   gitAuthor: GitAuthorSettings;
   /** Gitea servers gt is logged in to. Tokens never leave the server either. */
   giteaServers: GiteaServer[];
+  /** Global agent instructions (markdown) pushed into every environment. */
+  agentInstructions: string;
 }
 
 const file = () => path.join(config.dataDir, "settings.json");
@@ -48,6 +50,7 @@ function load(): StoredSettings {
     gitCredentials: stored.gitCredentials ?? [],
     gitAuthor: { ...DEFAULT_GIT_AUTHOR, ...stored.gitAuthor },
     giteaServers: stored.giteaServers ?? [],
+    agentInstructions: stored.agentInstructions ?? "",
   };
 }
 
@@ -98,6 +101,7 @@ export const settings = {
       giteaServers: current.giteaServers
         .map((g) => ({ url: g.url, isDefault: !!g.isDefault, updatedAt: g.updatedAt }))
         .sort((a, b) => a.url.localeCompare(b.url)),
+      agentInstructions: current.agentInstructions,
     };
   },
 };

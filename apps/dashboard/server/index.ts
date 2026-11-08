@@ -9,13 +9,14 @@ import { checkPassword, clearSession, isAuthenticated, issueSession, requireAuth
 import { config } from "./config.js";
 import { docker, imageExists, imageInfo } from "./docker.js";
 import { envs, HttpError } from "./envs.js";
+import { MAX_AGENT_INSTRUCTIONS, validateInstructions } from "./agents.js";
 import { normalizeGitHost, validateGitToken, validateGitUsername } from "./git.js";
 import { normalizeGiteaUrl, validateGiteaToken, type GiteaServer } from "./gitea.js";
 import { DEFAULT_PRICING } from "./pricing.js";
 import { proxy, ProxyError } from "./proxy.js";
 import { settings } from "./settings.js";
 import { DIMS, events, summary, timeseries, windows, type UsageQuery } from "./usage.js";
-import type { GiteaSyncResult, GitSyncResult, UsageDim } from "./shared/types.js";
+import type { AgentSyncResult, GiteaSyncResult, GitSyncResult, UsageDim } from "./shared/types.js";
 
 const app = new Hono();
 
@@ -359,6 +360,25 @@ api.delete("/gitea/servers", async (c) => {
 });
 api.post("/gitea/sync", giteaReply);
 
+// --- global agent instructions (CLAUDE.md / AGENTS.md in every environment) --
+async function syncAgents(): Promise<AgentSyncResult> {
+  try {
+    return await envs.syncAgents();
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    const why = err.code === "ENOENT" || err.code === "ECONNREFUSED" ? "Docker isn't reachable" : err.message;
+    return { synced: 0, applied: [], unchecked: [], outdated: [], failed: [], error: `Saved, but environments weren't updated: ${why}. They'll be updated when the dashboard next starts with Docker available.` };
+  }
+}
+const agentsReply = async (c: Context) => c.json({ settings: settings.public(), sync: await syncAgents() });
+api.put("/agents/instructions", async (c) => {
+  const input = await body(c, z.object({ instructions: z.string().max(MAX_AGENT_INSTRUCTIONS) }));
+  checkOrThrow(validateInstructions(input.instructions));
+  settings.update({ agentInstructions: input.instructions.replace(/\r\n?/g, "\n") });
+  return agentsReply(c);
+});
+api.post("/agents/sync", agentsReply);
+
 app.route("/api", api);
 
 // --- web UI ----------------------------------------------------------------
@@ -386,6 +406,14 @@ serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => 
     .then((r) => {
       if (r.failed.length) console.warn(`Gitea CLI settings not applied to: ${r.failed.map((f) => `${f.env} (${f.error})`).join(", ")}`);
       for (const c of r.checks.filter((k) => !k.ok)) console.warn(`gt in ${c.env} couldn't log in to ${c.url}: ${c.detail ?? ""}`);
+    })
+    .catch(() => undefined);
+  // Same for the global agent instructions.
+  envs
+    .syncAgents()
+    .then((r) => {
+      if (r.failed.length) console.warn(`agent instructions not applied to: ${r.failed.map((f) => `${f.env} (${f.error})`).join(", ")}`);
+      if (r.outdated.length) console.warn(`agent instructions need a newer image in: ${r.outdated.join(", ")}`);
     })
     .catch(() => undefined);
 });

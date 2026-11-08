@@ -235,6 +235,23 @@ export interface Settings {
   gitAuthor: { enabled: boolean; name: string; email: string };
   /** Gitea servers gt (the Gitea CLI) is logged in to. Tokens are never sent to the browser. */
   giteaServers: { url: string; isDefault: boolean; updatedAt: number }[];
+  /** Markdown added to ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md in every environment. */
+  agentInstructions: string;
+}
+
+/** Result of pushing the global agent instructions into environment containers. */
+export interface AgentSyncResult {
+  /** Containers the instructions file was written to. */
+  synced: number;
+  /** Running environments whose CLAUDE.md and AGENTS.md were rewritten. */
+  applied: string[];
+  /** Stopped environments: they pick the instructions up on their next start. */
+  unchecked: string[];
+  /** Running on an image too old to apply them: rebuild the image and update the environment. */
+  outdated: string[];
+  failed: { env: string; error: string }[];
+  /** Docker itself was unreachable. */
+  error?: string;
 }
 
 /** Result of pushing git settings into environment containers. */

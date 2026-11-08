@@ -35,10 +35,11 @@ import {
   parseGitCheck,
   type GitVars,
 } from "./git.js";
+import { AGENT_APPLY_SCRIPT, agentTarFiles } from "./agents.js";
 import { GITEA_FIX_PERMISSIONS, GITEA_SYNC_FILE, giteaTarFiles, parseGiteaSync, type GiteaSyncOutput } from "./gitea.js";
 import { proxy } from "./proxy.js";
 import { settings } from "./settings.js";
-import type { EnvSummary, GiteaSyncResult, GitSyncResult, PairLink, PairedSession } from "./shared/types.js";
+import type { AgentSyncResult, EnvSummary, GiteaSyncResult, GitSyncResult, PairLink, PairedSession } from "./shared/types.js";
 
 /**
  * Writes the managed git files into a container (running or stopped). The
@@ -70,6 +71,11 @@ async function checkGit(containerId: string): Promise<{ host: string; protocol: 
     }
   }
   return checks;
+}
+
+/** Writes the global agent instructions file into a container (running or stopped). */
+async function writeAgentFiles(containerId: string): Promise<void> {
+  await putFiles(containerId, "/", agentTarFiles(settings.raw.agentInstructions));
 }
 
 /** Writes the Gitea CLI server list and login script into a container (running or stopped). */
@@ -238,6 +244,7 @@ async function startEnvContainer(input: {
   await writeGitFiles(container.id, { env: input.name, owner: input.owner, hostname: input.hostname });
   // gt logs in at start (see the image's entrypoint).
   await writeGiteaFiles(container.id);
+  await writeAgentFiles(container.id);
   if (input.start !== false) await container.start();
   return container;
 }
@@ -367,6 +374,28 @@ export const envs = {
     result.checks.sort((a, b) => a.env.localeCompare(b.env) || a.url.localeCompare(b.url));
     result.skipped.sort((a, b) => a.env.localeCompare(b.env));
     result.unchecked.sort();
+    return result;
+  },
+
+  /**
+   * Pushes the global agent instructions into every environment, and in running
+   * ones rewrites ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md right away.
+   */
+  async syncAgents(): Promise<AgentSyncResult> {
+    const result: AgentSyncResult = { synced: 0, applied: [], unchecked: [], outdated: [], failed: [] };
+    result.failed = await forEachEnvContainer(async (c, env, inspect) => {
+      await writeAgentFiles(c.Id);
+      result.synced++;
+      if (!inspect.State.Running) {
+        result.unchecked.push(env);
+        return;
+      }
+      const res = await exec(c.Id, ["sh", "-c", AGENT_APPLY_SCRIPT], { user: "dev", env: ["HOME=/home/dev"], timeoutMs: 20_000 });
+      if (res.stdout.includes("missing")) result.outdated.push(env);
+      else if (res.exitCode === 0 && res.stdout.includes("applied")) result.applied.push(env);
+      else throw new Error((res.stderr || res.stdout).trim().slice(0, 300) || `exit code ${res.exitCode}`);
+    });
+    for (const k of ["applied", "unchecked", "outdated"] as const) result[k].sort();
     return result;
   },
 
