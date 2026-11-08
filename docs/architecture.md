@@ -116,7 +116,7 @@ writes the server list and a login script, and gt writes its own config:
 | File | Owner, mode | Purpose |
 | --- | --- | --- |
 | `/etc/t3m-gitea/servers` | root:dev, 0640 | `url<TAB>token<TAB>default\|-` |
-| `/etc/t3m-gitea/sync` | root, 0755 | Runs as `dev`. Pipes each token into `gt auth login --with-token --credential-store file --no-input`, logs out of servers it logged in to before that are no longer listed (it keeps those in `~/.config/gitea-cli/.t3m-managed`), and sets `default_host` |
+| `/etc/t3m-gitea/sync` | root, 0755 | Runs as `dev`. Pipes each token into `gt auth login --with-token --credential-store file --yes --no-input` (`--yes` replaces the login gt already has for that server, e.g. after a token change), logs out of servers it logged in to before that are no longer listed (it keeps those in `~/.config/gitea-cli/.t3m-managed`), and sets `default_host` |
 
 The dashboard runs the script in every running container on each change and
 on dashboard start, and reports per environment and server whether gt could

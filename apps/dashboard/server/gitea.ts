@@ -102,7 +102,7 @@ default=
 while IFS="$tab" read -r url token def; do
   [ -n "$url" ] || continue
   [ "$def" = default ] && default=$url
-  if out=$(printf '%s\\n' "$token" | gt auth login --host "$url" --with-token --credential-store file --no-input 2>&1); then
+  if out=$(printf '%s\\n' "$token" | gt auth login --host "$url" --with-token --credential-store file --yes --no-input 2>&1); then
     echo "ok $url"
   else
     echo "fail $url $(printf '%s' "$out" | tr '\\n' ' ' | cut -c1-500)"

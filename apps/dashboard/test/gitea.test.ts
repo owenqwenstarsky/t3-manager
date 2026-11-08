@@ -82,13 +82,17 @@ describe("sync script with a fake gt", () => {
     path.join(bin, "gt"),
     `#!/bin/sh
 logins="$HOME/logins"
-host=; prev=
-for a in "$@"; do [ "$prev" = --host ] && host=$a; prev=$a; done
+host=; prev=; yes=
+for a in "$@"; do [ "$prev" = --host ] && host=$a; [ "$a" = --yes ] && yes=1; prev=$a; done
 case "$1 $2" in
   "auth login")
     token=$(cat)
     echo "login $host $token" >> "${log}"
     case "$token" in bad*) echo "HTTP 401: invalid token" >&2; exit 4 ;; esac
+    # Like the real gt: replacing a stored login needs --yes.
+    if [ -z "$yes" ] && grep -qxF "$host" "$logins" 2>/dev/null; then
+      echo "Error: confirmation required to replace the stored credential on $host; rerun with --yes" >&2; exit 1
+    fi
     grep -vxF "$host" "$logins" 2>/dev/null > "$logins.new"; echo "$host" >> "$logins.new"; mv "$logins.new" "$logins" ;;
   "auth logout")
     echo "logout $host" >> "${log}"
@@ -129,6 +133,14 @@ esac
     expect(r.calls).toEqual(["login https://b.example.com tokB", "logout http://10.0.0.5:3000", "logout https://a.example.com"]);
     expect(r.out).toContain("removed https://a.example.com");
     expect(r.logins.sort()).toEqual(["https://b.example.com", "https://mine.example.com"]);
+  });
+
+  it("replaces a login gt already has for a listed server (a new token, or a rerun)", () => {
+    const servers = [{ url: "https://b.example.com", token: "tokB2", updatedAt: 0 }];
+    const r = run(servers);
+    expect(r.calls).toEqual(["login https://b.example.com tokB2"]);
+    expect(parseGiteaSync(r.out).checks).toEqual([{ url: "https://b.example.com", ok: true }]);
+    expect(parseGiteaSync(run(servers).out).checks).toEqual([{ url: "https://b.example.com", ok: true }]);
   });
 
   it("does nothing and says why when gt isn't installed", () => {
