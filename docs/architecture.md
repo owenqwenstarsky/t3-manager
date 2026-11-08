@@ -105,6 +105,27 @@ why on stderr, and git shows that in the clone error.
 Using system scope leaves `~/.gitconfig` to the person. The author shows on
 each environment card ("commits as …").
 
+## Gitea CLI setup (`apps/dashboard/server/gitea.ts`)
+
+`gt`, Gitea's official CLI (it replaces `tea`), is set up the same way:
+Gitea servers (instance URL, token, one default) live in the settings file,
+and the API only returns URLs. gt has no system-wide config: its logins live
+in `~/.config/gitea-cli`. So instead of writing gt's files, the dashboard
+writes the server list and a login script, and gt writes its own config:
+
+| File | Owner, mode | Purpose |
+| --- | --- | --- |
+| `/etc/t3m-gitea/servers` | root:dev, 0640 | `url<TAB>token<TAB>default\|-` |
+| `/etc/t3m-gitea/sync` | root, 0755 | Runs as `dev`. Pipes each token into `gt auth login --with-token --credential-store file --no-input`, logs out of servers it logged in to before that are no longer listed (it keeps those in `~/.config/gitea-cli/.t3m-managed`), and sets `default_host` |
+
+The dashboard runs the script in every running container on each change and
+on dashboard start, and reports per environment and server whether gt could
+log in. gt checks the token against the server, so this is a real check. A
+failed login keeps the earlier one. Stopped and new containers run the script
+from the entrypoint when they start, retrying a few times and logging to
+`/var/log/t3m-gitea.log`. Logins people add with `gt auth login` are not in
+the managed list, so the script leaves them alone.
+
 ## Agent instructions (`apps/dashboard/server/agents.ts`)
 
 **Settings → Agent instructions** holds one markdown text (up to 64 KB) for

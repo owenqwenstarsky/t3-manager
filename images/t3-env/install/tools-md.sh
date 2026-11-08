@@ -94,7 +94,9 @@ MD
 - Docker and other containers: there is no Docker daemon or CLI. Use SQLite, or database servers reachable over the network.
 
 ## Other CLIs
-git, git-lfs, gh, glab, tea, lazygit, delta, jq, yq, rg, fd, fzf, bat, eza, tree, httpie, curl, wget, tmux, direnv, watchexec, entr, hyperfine, just, task, protoc, buf, shellcheck, shfmt, hadolint, actionlint, taplo, yamllint, prettier, eslint, sqlite3, psql, mariadb, redis-cli, mongosh, chromium (Playwright, headless), neovim, vim, nano.
+git, git-lfs, gh, glab, gt (Gitea CLI), lazygit, delta, jq, yq, rg, fd, fzf, bat, eza, tree, httpie, curl, wget, tmux, direnv, watchexec, entr, hyperfine, just, task, protoc, buf, shellcheck, shfmt, hadolint, actionlint, taplo, yamllint, prettier, eslint, sqlite3, psql, mariadb, redis-cli, mongosh, chromium (Playwright, headless), neovim, vim, nano.
+
+`gt` is Gitea's official CLI (it replaces `tea`). Gitea servers set up in the dashboard (Settings → Gitea CLI) are already logged in: run `gt auth status`, then for example `gt pr list --repo owner/name`.
 MD
   if [ ${#missing[@]} -gt 0 ]; then
     printf '\n## Failed to install at build time\n%s. Install them yourself if you need them.\n' "$(printf '%s, ' "${missing[@]}" | sed 's/, $//')"
